@@ -30,6 +30,19 @@ The spare cell (3 or 5 players) shows the whole island from above with the stand
 - Player 2: WASD, F = fire, R = look back
 - Enter = start, Esc / P = pause, M = music
 
+## Online: friends at home
+
+Each player can also race from their own device, in the same race:
+- The lobby shows a **Friends at home** link (`index.html?join=CODE`). Send it to your friends.
+- They open it, type their name (tick *A second player on this screen* if two of them share a device) and tap **Join race**.
+- Online players see their own kart full screen. The screen only splits between players sitting at the same screen,
+  on the host or on a joining device.
+- The host's browser runs the race (it is the server) and streams it to each device about 20 times a second;
+  each device moves its own kart straight away and is gently corrected by the host, so steering feels instant.
+- Controls on a joining device: arrows (or WASD) + Space + Shift, a gamepad, or the on-screen buttons on a phone or tablet.
+- Anyone can press START. Same-screen players (phones, keyboards), online players and AI racers can all mix in one race.
+- If nobody plays on the host screen, it follows the race leader with the standings, like a TV.
+
 ## Bricks and power-ups
 
 Drive through the floating bricks. A **colour brick** sets the kind of power-up; **white bricks** (up to 3)
@@ -63,6 +76,7 @@ Same technology as SpaceGeo, extended to many phones (`js/padhost.js`, `pad.html
 - `js/track.js` – the spline track, road, brick walls, island scenery
 - `js/models.js` – toon materials, cartoon outlines, karts, minifigure drivers, bricks, trees, huts
 - `js/padhost.js` – the game side of the phone link (up to 5 phones)
+- `js/net.js` – online races: the host side (devices joining) and the joining device's link
 - `js/audio.js` – synth sound effects, engine and music (Web Audio, no files)
 - `pad.html` – the phone controller
 - `sw.js`, `manifest.webmanifest`, `pad.webmanifest` – installable app / offline cache
