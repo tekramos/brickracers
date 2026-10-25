@@ -16,7 +16,7 @@ export const PAD_CDN = {
 };
 // public brokers, tried in order; the QR tells the phone which one the game is on (pad.html has the same list)
 export const PAD_BROKERS = ['wss://broker.emqx.io:8084/mqtt', 'wss://broker.hivemq.com:8884/mqtt', 'wss://test.mosquitto.org:8081/mqtt'];
-const PAD_TOPIC = 'brickracers/v1/';
+const PAD_TOPIC = 'tekracers/v1/';
 const PAD_ICE = [{ urls:['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }, { urls:'stun:stun.cloudflare.com:3478' }];
 // where phones load pad.html from: next to this page when the game is served over http(s),
 // otherwise (opened from a file) set window.PAD_HOME to the deployed address

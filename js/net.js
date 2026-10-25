@@ -12,7 +12,7 @@
    ============================================================ */
 import { PAD_CDN, PAD_BROKERS } from './padhost.js';
 
-const TOPIC = 'brickracers/v1/';
+const TOPIC = 'tekracers/v1/';
 const ICE = [{ urls:['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }, { urls:'stun:stun.cloudflare.com:3478' }];
 const BUTTONS = ['fire', 'start', 'look'];
 const loadJs = src => new Promise((ok, bad) => {

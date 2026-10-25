@@ -5,72 +5,79 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
-<meta name="theme-color" content="#1b3a8a">
-<meta name="apple-mobile-web-app-title" content="Brick Racers Pad">
+<meta name="theme-color" content="#120c2c">
+<meta name="apple-mobile-web-app-title" content="TekRacers Pad">
 <link rel="manifest" href="pad.webmanifest">
 <link rel="icon" type="image/svg+xml" href="icons/icon.svg">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Lilita+One&family=Nunito:wght@700;900&display=swap">
-<title>Brick Racers Pad</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Russo+One&family=Exo+2:ital,wght@0,500;0,700;1,800&display=swap">
+<title>TekRacers Pad</title>
 <style>
-:root{--pc:#e3242b;--ink:#141a2e;--txt:#fff;--disp:"Lilita One",system-ui,sans-serif;
+:root{--pc:#ff3b4e;--ink:#0b0820;--txt:#fff;--disp:"Russo One",system-ui,sans-serif;--body:"Exo 2",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --cyan:#3ff6ff;--mag:#ff3df2;--grad:linear-gradient(90deg,#ff8a2a,#ff3df2 50%,#3ff6ff);
   --st:max(8px,env(safe-area-inset-top));--sl:max(12px,env(safe-area-inset-left));--sr:max(12px,env(safe-area-inset-right));--sb:max(10px,env(safe-area-inset-bottom))}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
-html,body{margin:0;height:100%;color:var(--txt);font-family:"Nunito",system-ui,-apple-system,"Segoe UI",sans-serif;font-weight:900;overflow:hidden;touch-action:none;overscroll-behavior:none;
-  background:#1b3a8a}
-/* a baseplate: studs all over */
-body{background:radial-gradient(circle at 50% 45%,rgba(255,255,255,.14) 0 9px,rgba(0,0,0,.18) 10px 11px,transparent 12px) 0 0/36px 36px,linear-gradient(160deg,#2456c9,#16307a)}
-#top{position:fixed;left:0;right:0;top:0;display:flex;align-items:center;gap:10px;padding:var(--st) var(--sr) 6px var(--sl);z-index:5;background:linear-gradient(rgba(10,16,40,.75),rgba(10,16,40,0))}
-#me{display:flex;align-items:center;gap:8px;font:20px var(--disp);letter-spacing:.02em;text-shadow:0 2px 0 rgba(0,0,0,.35)}
-#me .dot{width:22px;height:22px;border-radius:6px;background:var(--pc);box-shadow:inset 0 -3px 0 rgba(0,0,0,.25),0 0 0 2px rgba(255,255,255,.7)}
-#top .st{font-size:12px;color:#ffe46b;opacity:.9;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-#top .st.ok{color:#8dffb0}
-#race{font:22px var(--disp);text-shadow:0 2px 0 rgba(0,0,0,.4);white-space:nowrap}
-#race b{color:#ffe14d}
-.tb{font:15px var(--disp);letter-spacing:.04em;padding:8px 12px;border-radius:12px;border:0;color:var(--ink);background:#ffe14d;box-shadow:inset 0 -4px 0 rgba(0,0,0,.2)}
-.tb.off{background:rgba(255,255,255,.25);color:#fff}
+html,body{margin:0;height:100%;color:var(--txt);font-family:var(--body);font-weight:700;overflow:hidden;touch-action:none;overscroll-behavior:none;background:#120c2c}
+/* dark carbon with a sunset glow along the bottom and a perspective grid */
+body{background:
+  linear-gradient(transparent 62%,color-mix(in srgb,var(--pc) 22%,transparent)),
+  repeating-linear-gradient(90deg,rgba(255,255,255,.035) 0 1px,transparent 1px 44px),
+  repeating-linear-gradient(0deg,rgba(255,255,255,.035) 0 1px,transparent 1px 44px),
+  radial-gradient(120% 90% at 50% 120%,#5a1f5c,#120c2c 70%)}
+#top{position:fixed;left:0;right:0;top:0;display:flex;align-items:center;gap:12px;padding:var(--st) var(--sr) 8px var(--sl);z-index:5;background:linear-gradient(rgba(10,6,28,.9),rgba(10,6,28,0))}
+#me{display:flex;align-items:center;gap:10px;font:18px var(--disp);letter-spacing:.06em}
+#me .dot{width:26px;height:10px;background:var(--pc);transform:skewX(-20deg);box-shadow:0 0 12px var(--pc)}
+#top .st{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:#ffd28a;opacity:.9;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#top .st.ok{color:#28e07a}
+#race{font:italic 22px var(--disp);white-space:nowrap;letter-spacing:.04em}
+#race b{color:var(--cyan);text-shadow:0 0 10px rgba(63,246,255,.6)}
+.tb{font:12px var(--disp);letter-spacing:.14em;padding:9px 14px;border:0;color:var(--ink);background:var(--cyan);clip-path:polygon(7px 0,100% 0,calc(100% - 7px) 100%,0 100%)}
+.tb.off{background:rgba(255,255,255,.12);color:#fff}
 #pad{position:fixed;inset:0}
 .half{position:absolute;top:0;bottom:0;width:50%}
 #L{left:0}#R{right:0}
 /* steering: a horizontal slider that appears where your thumb lands */
-#L .rail{position:absolute;height:64px;width:220px;margin:-32px 0 0 -110px;border-radius:32px;background:rgba(10,16,40,.35);border:3px solid rgba(255,255,255,.35);pointer-events:none;transition:opacity .2s}
-#L .rail.idle{opacity:.55}
-#L .knob{position:absolute;left:50%;top:50%;width:76px;height:76px;margin:-38px 0 0 -38px;border-radius:20px;background:var(--pc);box-shadow:inset 0 -6px 0 rgba(0,0,0,.25),0 4px 12px rgba(0,0,0,.4)}
-#L .knob::before,#L .knob::after{content:"";position:absolute;top:14px;width:18px;height:18px;border-radius:50%;background:rgba(255,255,255,.28);box-shadow:inset 0 -2px 0 rgba(0,0,0,.15)}
-#L .knob::before{left:14px}#L .knob::after{right:14px}
-#L .lbl{position:absolute;left:0;right:0;bottom:calc(var(--sb) + 8px);text-align:center;font-size:12px;opacity:.7}
+#L .rail{position:absolute;height:60px;width:230px;margin:-30px 0 0 -115px;background:rgba(10,6,28,.5);box-shadow:inset 0 0 0 1.5px rgba(255,255,255,.25);pointer-events:none;transition:opacity .2s;
+  clip-path:polygon(14px 0,calc(100% - 14px) 0,100% 50%,calc(100% - 14px) 100%,14px 100%,0 50%)}
+#L .rail::before{content:"";position:absolute;left:18px;right:18px;top:50%;height:2px;margin-top:-1px;background:var(--grad);opacity:.5}
+#L .rail.idle{opacity:.5}
+#L .knob{position:absolute;left:50%;top:50%;width:70px;height:52px;margin:-26px 0 0 -35px;background:var(--pc);box-shadow:0 0 22px var(--pc);clip-path:polygon(12px 0,calc(100% - 12px) 0,100% 50%,calc(100% - 12px) 100%,12px 100%,0 50%)}
+#L .knob::before{content:"";position:absolute;inset:18px 20px;border-left:3px solid rgba(255,255,255,.7);border-right:3px solid rgba(255,255,255,.7)}
+#L .lbl{position:absolute;left:0;right:0;bottom:calc(var(--sb) + 8px);text-align:center;font-size:10px;letter-spacing:.24em;text-transform:uppercase;opacity:.55}
 #tilt{position:absolute;left:var(--sl);bottom:calc(var(--sb) + 30px)}
-/* right side: big brick buttons */
-.btn{position:absolute;display:flex;align-items:center;justify-content:center;flex-direction:column;border-radius:22px;font:20px var(--disp);letter-spacing:.04em;color:#fff;text-shadow:0 2px 0 rgba(0,0,0,.3);
-  box-shadow:inset 0 -8px 0 rgba(0,0,0,.25),0 6px 14px rgba(0,0,0,.35);transition:transform .06s}
-.btn.on{transform:translateY(4px) scale(.97);box-shadow:inset 0 -3px 0 rgba(0,0,0,.25),0 2px 6px rgba(0,0,0,.35)}
-.btn small{font:700 11px "Nunito",sans-serif;opacity:.85;text-shadow:none}
-#bGas{right:var(--sr);bottom:var(--sb);width:min(36vw,190px);height:min(44vh,170px);background:#2fb24c}
-#bBrake{right:calc(var(--sr) + min(36vw,190px) + 12px);bottom:var(--sb);width:min(18vw,100px);height:min(30vh,110px);background:#7a8297}
-#bFire{right:var(--sr);bottom:calc(var(--sb) + min(44vh,170px) + 14px);width:min(36vw,190px);height:min(30vh,110px);background:#3b3f55}
-#bFire .brick{display:flex;gap:4px;align-items:center}
-#bFire .bk{width:46px;height:30px;border-radius:6px;background:var(--bc,#555);box-shadow:inset 0 -5px 0 rgba(0,0,0,.25);position:relative}
-#bFire .bk::before,#bFire .bk::after{content:"";position:absolute;top:-7px;width:14px;height:8px;border-radius:4px 4px 0 0;background:var(--bc,#555)}
-#bFire .bk::before{left:6px}#bFire .bk::after{right:6px}
-#bFire .pips{display:flex;gap:4px;margin-left:6px}
-#bFire .pips i{width:12px;height:12px;border-radius:3px;background:rgba(255,255,255,.18)}
+/* right side: big angled buttons */
+.btn{position:absolute;display:flex;align-items:center;justify-content:center;flex-direction:column;font:20px var(--disp);letter-spacing:.12em;color:#fff;
+  clip-path:polygon(16px 0,100% 0,100% calc(100% - 16px),calc(100% - 16px) 100%,0 100%,0 16px);transition:transform .06s,filter .1s}
+.btn.on{transform:scale(.95);filter:brightness(1.35)}
+.btn small{font:600 10px var(--body);letter-spacing:.2em;text-transform:uppercase;opacity:.8}
+#bGas{right:var(--sr);bottom:var(--sb);width:min(36vw,190px);height:min(44vh,170px);background:linear-gradient(160deg,#3dff9a,#14a85a);box-shadow:inset 0 0 0 2px rgba(255,255,255,.25);text-shadow:0 2px 8px rgba(0,60,20,.5)}
+#bBrake{right:calc(var(--sr) + min(36vw,190px) + 12px);bottom:var(--sb);width:min(18vw,100px);height:min(30vh,110px);background:rgba(255,255,255,.1);box-shadow:inset 0 0 0 1.5px rgba(255,255,255,.3)}
+#bFire{right:var(--sr);bottom:calc(var(--sb) + min(44vh,170px) + 14px);width:min(36vw,190px);height:min(30vh,110px);background:rgba(20,14,48,.85);box-shadow:inset 0 0 0 1.5px rgba(255,255,255,.2),inset 0 -3px 0 var(--bc,#555)}
+#bFire .core{display:flex;gap:4px;align-items:center}
+#bFire .bk{width:26px;height:36px;background:var(--bc,#555);clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%);filter:drop-shadow(0 0 8px var(--bc,#555))}
+#bFire .pips{display:flex;gap:4px;margin-left:10px}
+#bFire .pips i{width:8px;height:16px;background:rgba(255,255,255,.16);transform:skewX(-18deg)}
 #bFire .pips i.on{background:#fff;box-shadow:0 0 8px #fff}
-#bFire.ready{background:#545b80;animation:pulse 1s infinite}
-@keyframes pulse{50%{filter:brightness(1.25)}}
-#pu{font-size:14px;margin-top:4px}
-#bStart{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:170px;height:84px;background:#e3242b;font-size:26px;z-index:3}
-#bStart.on{transform:translate(-50%,calc(-50% + 4px)) scale(.97)}
-#msg{position:fixed;left:50%;top:22%;transform:translateX(-50%);font:30px var(--disp);text-align:center;text-shadow:0 3px 0 rgba(0,0,0,.4);pointer-events:none;z-index:4;white-space:nowrap}
-#msg small{display:block;font:700 13px "Nunito",sans-serif;opacity:.85;text-shadow:none}
+#bFire.ready{background:color-mix(in srgb,var(--bc) 30%,#140e30);animation:pulse 1s infinite}
+@keyframes pulse{50%{filter:brightness(1.35)}}
+#pu{font-size:12px;letter-spacing:.06em;margin-top:6px}
+#bStart{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:190px;height:80px;background:linear-gradient(90deg,#ff8a2a,#ff3d7a 55%,#ff3df2);font-size:24px;z-index:3;box-shadow:0 0 30px rgba(255,61,140,.5)}
+#bStart.on{transform:translate(-50%,-50%) scale(.95)}
+#msg{position:fixed;left:50%;top:22%;transform:translateX(-50%);font:italic 30px var(--disp);letter-spacing:.04em;text-align:center;text-shadow:0 0 18px rgba(255,61,242,.6);pointer-events:none;z-index:4;white-space:nowrap}
+#msg small{display:block;font:600 12px var(--body);letter-spacing:.16em;text-transform:uppercase;opacity:.8;text-shadow:none;font-style:normal}
 #flash{position:fixed;inset:0;pointer-events:none;background:#fff;opacity:0;z-index:6;transition:opacity .4s}
 /* join screen */
-#join{position:fixed;inset:0;display:none;align-items:center;justify-content:center;flex-direction:column;gap:12px;z-index:9;padding:20px;background:rgba(10,16,40,.75);text-align:center}
-#join h1{margin:0;font:42px var(--disp);color:#ffe14d;text-shadow:0 4px 0 #b3261e,0 6px 12px rgba(0,0,0,.4);letter-spacing:.03em}
-#join input{font:24px var(--disp);text-align:center;padding:10px 14px;border-radius:14px;border:3px solid #fff;background:#fff;color:var(--ink);width:min(260px,80vw);text-transform:none;user-select:text;-webkit-user-select:text}
+#join{position:fixed;inset:0;display:none;align-items:center;justify-content:center;flex-direction:column;gap:14px;z-index:9;padding:20px;background:rgba(10,6,28,.82);text-align:center}
+#join h1{margin:0 0 6px;font:italic 46px/1 var(--disp);letter-spacing:.02em;transform:skewX(-8deg)}
+#join h1 .r{background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}
+#join input{font:20px var(--disp);letter-spacing:.06em;text-align:center;padding:12px 16px;border:0;background:rgba(255,255,255,.08);color:#fff;width:min(270px,80vw);box-shadow:inset 0 -2px 0 var(--mag);outline:none;
+  clip-path:polygon(8px 0,100% 0,calc(100% - 8px) 100%,0 100%);text-transform:none;user-select:text;-webkit-user-select:text}
+#join input:focus{box-shadow:inset 0 -2px 0 var(--cyan);background:rgba(255,255,255,.12)}
+#join input::placeholder{color:rgba(255,255,255,.35)}
 #join #code{text-transform:uppercase;letter-spacing:.3em}
-#join .go{font:24px var(--disp);padding:12px 28px;border-radius:16px;border:0;background:#2fb24c;color:#fff;box-shadow:inset 0 -6px 0 rgba(0,0,0,.25)}
-#join p{margin:0;font-size:13px;opacity:.8;max-width:340px}
-#rot{position:fixed;inset:0;display:none;align-items:center;justify-content:center;z-index:8;background:rgba(10,16,40,.9);font:24px var(--disp);text-align:center;padding:30px;flex-direction:column;gap:8px}
-#rot small{font:700 13px "Nunito",sans-serif;opacity:.8}
+#join .go{font:20px var(--disp);letter-spacing:.1em;padding:14px 34px;border:0;background:linear-gradient(90deg,#ff8a2a,#ff3d7a 55%,#ff3df2);color:#fff;clip-path:polygon(10px 0,100% 0,calc(100% - 10px) 100%,0 100%)}
+#join p{margin:0;font-size:12px;font-weight:500;opacity:.7;max-width:340px;line-height:1.5}
+#rot{position:fixed;inset:0;display:none;align-items:center;justify-content:center;z-index:8;background:rgba(10,6,28,.94);font:20px var(--disp);letter-spacing:.06em;text-align:center;padding:30px;flex-direction:column;gap:10px}
+#rot small{font:500 13px var(--body);opacity:.75;letter-spacing:0}
 @media (orientation:portrait){#rot.show{display:flex}}
 </style>
 </head>
@@ -79,7 +86,7 @@ body{background:radial-gradient(circle at 50% 45%,rgba(255,255,255,.14) 0 9px,rg
 <div id="pad">
   <div class="half" id="L"><div class="rail idle"><div class="knob"></div></div><button class="tb off" id="tilt">TILT: OFF</button><div class="lbl">slide to steer</div></div>
   <div class="half" id="R"></div>
-  <div class="btn" id="bFire"><div class="brick"><div class="bk"></div><div class="pips"><i></i><i></i><i></i></div></div><div id="pu">no brick</div></div>
+  <div class="btn" id="bFire"><div class="core"><div class="bk"></div><div class="pips"><i></i><i></i><i></i></div></div><div id="pu">no core</div></div>
   <div class="btn" id="bBrake">BRAKE<small>reverse</small></div>
   <div class="btn" id="bGas">GAS</div>
   <div class="btn" id="bStart">START</div>
@@ -88,7 +95,7 @@ body{background:radial-gradient(circle at 50% 45%,rgba(255,255,255,.14) 0 9px,rg
 <div id="flash"></div>
 <div id="rot" class="show">Turn your phone sideways<small>(it still works upright, but steering is easier sideways)</small><button class="tb" onclick="this.parentNode.classList.remove('show')">OK</button></div>
 <div id="join">
-  <h1>BRICK RACERS</h1>
+  <h1>TEK<span class="r">RACERS</span></h1>
   <input id="name" maxlength="12" placeholder="Your name" autocomplete="nickname">
   <input id="code" maxlength="4" placeholder="CODE" autocomplete="off">
   <button class="go" id="go">JOIN RACE</button>
@@ -187,7 +194,7 @@ function say(t, sub, ms){ $('#msg').innerHTML = ''; $('#msg').append(t); if (sub
    WebRTC data channel negotiated through that relay, which takes over the moment it opens ---------- */
 const BROKERS = ['wss://broker.emqx.io:8084/mqtt', 'wss://broker.hivemq.com:8884/mqtt', 'wss://test.mosquitto.org:8081/mqtt'];
 const ICE = [{ urls:['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }, { urls:'stun:stun.cloudflare.com:3478' }];
-const QS = new URLSearchParams(location.search), TOPIC = () => 'brickracers/v1/' + code;
+const QS = new URLSearchParams(location.search), TOPIC = () => 'tekracers/v1/' + code;
 let mq = null, relayUp = false, gameSeen = -1e9, pc = null, dc = null, rtcId = '', offerT = -1e9, ping = 0, tries = 0, slot = -1;
 const direct = () => !!(dc && dc.readyState === 'open');
 const linked = () => direct() || performance.now() - gameSeen < 3000;
@@ -225,8 +232,8 @@ function setSlot(d){
   slot = d.i; document.documentElement.style.setProperty('--pc', d.col);
   $('#me .nm').textContent = d.name || name || 'P' + (d.i + 1); $('meta[name=theme-color]').content = d.col;
 }
-const PU = { red:['#e3242b', 'Cannon', 'Homing missile', 'Twin missiles', 'Lightning'], yellow:['#ffcd03', 'Oil slick', 'Mine', 'Mine field', 'Shockwave'],
-             blue:['#1e6fe8', 'Shield', 'Long shield', 'Spike shield', 'Super shield'], green:['#2fb24c', 'Turbo', 'Big turbo', 'Mega turbo', 'Warp'] };
+const PU = { red:['#ff3b4e', 'Cannon', 'Homing missile', 'Twin missiles', 'Lightning'], yellow:['#ffc21a', 'Oil slick', 'Mine', 'Mine field', 'Shockwave'],
+             blue:['#2f8bff', 'Shield', 'Long shield', 'Spike shield', 'Super shield'], green:['#28e07a', 'Turbo', 'Big turbo', 'Mega turbo', 'Warp'] };
 const ord = n => n + (['th', 'st', 'nd', 'rd'][(n % 100 - 20) % 10] || ['th', 'st', 'nd', 'rd'][n % 100] || 'th');
 function state(d){
   gameState = d.state;
@@ -236,9 +243,9 @@ function state(d){
   $('#race').innerHTML = racing || d.state === 'results' ? `<b>${ord(d.pos)}</b> · LAP ${Math.min(d.lap, d.laps)}/${d.laps}` : (d.state === 'lobby' ? 'In the lobby' : '');
   const f = $('#bFire'), bk = f.querySelector('.bk'), pips = f.querySelectorAll('.pips i');
   const p = d.pu && PU[d.pu];
-  bk.style.setProperty('--bc', p ? p[0] : (d.w ? '#f4f4f4' : '#555'));
+  f.style.setProperty('--bc', p ? p[0] : (d.w ? '#f2f4ff' : '#555'));
   pips.forEach((e, i) => e.classList.toggle('on', i < (d.w || 0)));
-  $('#pu').textContent = p ? p[1 + (d.w || 0)] : d.w ? 'add a colour brick' : 'no brick';
+  $('#pu').textContent = p ? p[1 + (d.w || 0)] : d.w ? 'add a colour core' : 'no core';
   f.classList.toggle('ready', !!p);
   if (d.state === 'lobby') say('You are in!', 'press START on any phone when everyone has joined', 0);
   else if (d.state === 'results' && d.fin) say(ord(d.pos) + ' place!', 'press AGAIN to race again', 0);

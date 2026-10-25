@@ -1,5 +1,5 @@
 /* ============================================================
-   Brick Racers: renderer, lobby, players (phones, keyboards, AI, online), split screen and HUD.
+   TekRacers: renderer, lobby, players (phones, keyboards, AI, online), split screen and HUD.
    Two ways to play together, mixed freely in one race:
    - same screen: phones or keyboards, and the screen splits between those players
    - online: friends open index.html?join=CODE on their own device and see their own kart full
@@ -32,7 +32,7 @@ const net = new NetHost();      // host: devices joining online
 let client = null;              // joining device: the link to the host
 let netEvents = [], netEvId = 0, snapT = 0, raceId = 0, grid = [];
 const keys = new Set();
-window.BR = { slots, pads, net, get client(){ return client; }, get race(){ return race; }, get state(){ return state; } }; // handy for debugging
+window.BR = { slots, pads, net, get client(){ return client; }, get race(){ return race; }, get track(){ return track; }, get state(){ return state; } }; // handy for debugging
 
 /* ---------- boot ---------- */
 async function boot(){
@@ -56,14 +56,15 @@ async function boot(){
   if (gpuFailed && opts.rend !== 'webgl') $('#badge').textContent += ' (WebGPU failed on this device)';
 
   scene = new THREE.Scene();
-  scene.background = new THREE.Color('#9fd4ff');
-  scene.fog = new THREE.Fog('#bfe6ff', 160, 720);
-  scene.add(new THREE.HemisphereLight('#e8f4ff', '#6aa04a', 1.6));
-  const sun = new THREE.DirectionalLight('#fff3d6', 2.6); sun.position.set(120, 220, 90); scene.add(sun);
-
+  scene.background = new THREE.Color('#ff9a5c');
+  scene.fog = new THREE.Fog('#f0936a', 220, 900);
   track = new Track(); track.build(scene, opts.q);
-  // overview camera for the spare split-screen cell: the whole island from above
-  overview = new THREE.PerspectiveCamera(42, 1, 10, 2000); overview.position.set(0, 430, 90); overview.lookAt(0, 0, -100); overview.layers.enable(1);
+  // warm low sun from the sunset, cool purple sky light from above
+  scene.add(new THREE.HemisphereLight('#9fa8ff', '#7a3b2a', 1.25));
+  const sun = new THREE.DirectionalLight('#ffd2a0', 3.1); sun.position.copy(track.sunDir).multiplyScalar(300).setY(160); scene.add(sun);
+  const fill = new THREE.DirectionalLight('#7fb8ff', .6); fill.position.set(200, 120, 300); scene.add(fill);
+  // overview camera for the spare split-screen cell: the whole canyon circuit from above
+  overview = new THREE.PerspectiveCamera(42, 1, 10, 2500); overview.position.set(-9, 600, 60); overview.lookAt(-9, 0, -200); overview.layers.enable(1);
   demoCam = new THREE.PerspectiveCamera(60, 1, .3, 2000);
 
   addEventListener('resize', () => renderer.setSize(innerWidth, innerHeight));
@@ -205,7 +206,7 @@ function renderOpts(){
 function renderSlots(){
   const el = $('#slots'); el.innerHTML = '';
   slots.forEach((s, i) => {
-    const d = document.createElement('div'); d.className = 'slot' + (s ? ' on' : ''); d.style.setProperty('--c', PLAYER_COLORS[i]);
+    const d = document.createElement('div'); d.className = 'slot' + (s ? ' on' : ''); d.dataset.n = String(i + 1).padStart(2, '0'); d.style.setProperty('--c', PLAYER_COLORS[i]);
     const bk = document.createElement('div'); bk.className = 'bk'; d.append(bk);
     const nm = document.createElement('div'); nm.className = 'nm'; nm.textContent = s ? s.name : 'P' + (i + 1); d.append(nm);
     const how = document.createElement('div'); how.className = 'how';
@@ -267,7 +268,7 @@ function startRace(){
   for (const k of race.karts){ const m = new THREE.Mesh(new THREE.ConeGeometry(7, 14, 4).rotateX(Math.PI), basic(k.pl.color)); m.position.y = 18; m.layers.set(1); k.mesh.add(m); }
   race.onEvent = e => {
     pads.send(Object.assign({ t:'ev' }, e)); netEvent(['e', e, -1]);
-    if (e.e === 'count') big(e.n); if (e.e === 'go') big('GO!');
+    if (e.e === 'count'){ big(e.n); startLights(e.n); } if (e.e === 'go'){ big('GO!'); startLights(0); }
     if (e.e === 'flash') gflash(e.col);
   };
   state = 'race';
@@ -307,6 +308,8 @@ function screenKarts(){
 function buildHud(){
   const el = $('#hud'); el.innerHTML = ''; hud = [];
   const humans = screenKarts(), L = humans.length ? layout(humans.length) : { views:[], spare:[0, 0, 1, 1] };
+  // with a split screen the race clock sits where the views meet, clear of each view's lap box
+  $('#timer').classList.toggle('mid', humans.length > 1);
   humans.forEach((k, i) => {
     const [x, y, w, h] = L.views[i], v = document.createElement('div'); v.className = 'view';
     Object.assign(v.style, { left:x * 100 + '%', top:y * 100 + '%', width:w * 100 + '%', height:h * 100 + '%' });
@@ -343,10 +346,16 @@ function drawMini(){
   const pad = 12, k = (S - pad * 2) / mb.s, P = (x, z) => [S / 2 + (x - mb.cx) * k, S / 2 + (z - mb.cz) * k];
   g.lineJoin = 'round'; g.lineCap = 'round';
   const path = () => { g.beginPath(); track.P.forEach((p, i) => { if (i % 4) return; const [a, b] = P(p.x, p.z); i ? g.lineTo(a, b) : g.moveTo(a, b); }); g.closePath(); };
-  path(); g.strokeStyle = 'rgba(0,0,0,.55)'; g.lineWidth = 9; g.stroke();
-  path(); g.strokeStyle = '#fff'; g.lineWidth = 5; g.stroke();
-  const [sx, sy] = P(track.P[4].x, track.P[4].z); g.fillStyle = '#111'; g.fillRect(sx - 4, sy - 4, 8, 8);
-  for (const kk of [...race.karts].reverse()){ const [a, b] = P(kk.x, kk.z); g.fillStyle = kk.pl.color; g.strokeStyle = '#fff'; g.lineWidth = 2; g.beginPath(); g.arc(a, b, kk.pl.kind === 'ai' ? 4 : 6, 0, 7); g.fill(); g.stroke(); }
+  path(); g.strokeStyle = 'rgba(8,6,20,.7)'; g.lineWidth = 9; g.stroke();
+  path(); g.strokeStyle = '#3ff6ff'; g.lineWidth = 3.5; g.shadowColor = '#3ff6ff'; g.shadowBlur = 8; g.stroke(); g.shadowBlur = 0;
+  // the bridge in orange, the tunnel dashed
+  for (const [kind, col, dash] of [['bridge', '#ffa040', []], ['tunnel', '#ff3df2', [3, 4]]]){
+    g.beginPath(); let on = false;
+    track.P.forEach((p, i) => { if (i % 2) return; const [a, b] = P(p.x, p.z); if (track.kind[i] === kind){ on ? g.lineTo(a, b) : g.moveTo(a, b); on = true; } else on = false; });
+    g.setLineDash(dash); g.strokeStyle = col; g.lineWidth = 4; g.stroke(); g.setLineDash([]);
+  }
+  const [sx, sy] = P(track.P[4].x, track.P[4].z); g.fillStyle = '#fff'; g.fillRect(sx - 4, sy - 2, 8, 4);
+  for (const kk of [...race.karts].reverse()){ const [a, b] = P(kk.x, kk.z); g.fillStyle = kk.pl.color; g.strokeStyle = kk.pl.kind === 'ai' ? 'rgba(8,6,20,.8)' : '#fff'; g.lineWidth = 2; g.beginPath(); g.arc(a, b, kk.pl.kind === 'ai' ? 4 : 6, 0, 7); g.fill(); g.stroke(); }
 }
 function updateHud(){
   for (const h of hud){
@@ -357,7 +366,7 @@ function updateHud(){
     if (c.pk !== pk){ c.pk = pk; const p = k.pu && PU[k.pu];
       h.pu.style.setProperty('--bc', p ? p.col : k.w ? '#f4f4f4' : '#444'); h.pu.classList.toggle('empty', !p && !k.w);
       h.pu.querySelectorAll('.pips i').forEach((e, i) => e.classList.toggle('on', i < k.w));
-      h.pu.querySelector('span').textContent = p ? p.names[k.w] : k.w ? 'add a colour brick' : 'no brick'; }
+      h.pu.querySelector('span').textContent = p ? p.names[k.w] : k.w ? 'add a colour core' : 'no core'; }
     h.wrong.classList.toggle('hidden', !k.wrong);
     if (k.fin && !c.fin){ c.fin = true; h.done.textContent = ord(k.place) + '!  ' + fmt(k.finT); h.done.classList.remove('hidden'); }
   }
@@ -369,6 +378,13 @@ function updateHud(){
   drawMini();
 }
 function viewFlash(s){ const h = hud.find(h => h.k.pl.slot === s.i); if (!h) return; const f = h.flash; f.style.transition = 'none'; f.style.opacity = .45; void f.offsetWidth; f.style.transition = 'opacity .5s'; f.style.opacity = 0; }
+// the gantry lights: red ones come on as the count goes down, all green on GO
+let lightsN = -1;
+function startLights(n){
+  if (n === lightsN) return; lightsN = n;
+  const lit = n === 0 ? 5 : n >= 3 ? 2 : n === 2 ? 4 : 5;
+  track.startLights.forEach((l, i) => l.material = basic(n === 0 ? '#3dff8a' : n > 0 && i < lit ? '#ff2a3c' : '#40141a'));
+}
 function gflash(col){ const f = $('#gflash'); f.style.background = col; f.style.transition = 'none'; f.style.opacity = .6; void f.offsetWidth; f.style.transition = 'opacity .6s'; f.style.opacity = 0; }
 function big(t, small){ const b = $('#big'); b.textContent = t; b.style.fontSize = small ? 'clamp(40px,9vmin,110px)' : ''; b.classList.remove('pop'); void b.offsetWidth; b.classList.add('pop'); }
 
@@ -393,6 +409,8 @@ const view = (cam, x, y, w, h) => {
   renderer.render(scene, cam);
 };
 function frame(dt){
+  // keep the gantry lights in step with the race even if a count event was missed (joining devices)
+  const lr = race || demo; if (lr) startLights(lr.state === 'countdown' ? (lightsN > 0 ? lightsN : -1) : 0);
   if (!JOIN){ pads.tick(); readInputs(); feed(dt); } else readLocal();
   if (JOIN) client && sendLocal(dt);
   else net.tick();
@@ -404,7 +422,11 @@ function frame(dt){
     const k = demo.order ? demo.order[demoIdx % demo.karts.length] : demo.karts[0];
     // a slow cinematic camera: high and to the side of the kart
     const f = new THREE.Vector3(Math.sin(k.h), 0, Math.cos(k.h)), r = new THREE.Vector3(-f.z, 0, f.x), a = demoT / 9;
-    const want = new THREE.Vector3(k.x, k.y, k.z).addScaledVector(f, -14 + a * 4).addScaledVector(r, 8 - a * 10).add(new THREE.Vector3(0, 6 + Math.sin(a * 3) * 2, 0));
+    // inside the tunnel stay close behind; elsewhere keep the camera above the ground
+    const inTunnel = track.kind[k.idx] === 'tunnel' || track.kind[track.wrap(k.idx - 14)] === 'tunnel';
+    const want = inTunnel ? new THREE.Vector3(k.x, k.y + 3.2, k.z).addScaledVector(f, -9)
+      : new THREE.Vector3(k.x, k.y, k.z).addScaledVector(f, -14 + a * 4).addScaledVector(r, 8 - a * 10).add(new THREE.Vector3(0, 6 + Math.sin(a * 3) * 2, 0));
+    if (!inTunnel) want.y = Math.max(want.y, track.height(want.x, want.z) + 2.5);
     demoCam.position.lerp(want, demoT < .05 ? 1 : 1 - Math.exp(-dt * 3)); demoCam.lookAt(k.x, k.y + 1.5, k.z);
     Snd.engine(0, false);
     renderer.setScissorTest(false); view(demoCam, 0, 0, 1, 1);
@@ -529,7 +551,7 @@ function onSnap(s){
     if (id <= lastEv) continue; lastEv = id;
     if (e[0] === 's'){ const mine = client.slots.includes(e[2]); if (e[2] === -1 || mine && e[1] !== 'bump') Snd.play(e[1]); }
     else if (e[0] === 'e'){ const ev = e[1], mine = e[2] === -1 || client.slots.includes(e[2]); if (!mine) continue;
-      if (ev.e === 'count') big(ev.n); if (ev.e === 'go') big('GO!'); if (ev.e === 'flash') gflash(ev.col);
+      if (ev.e === 'count'){ big(ev.n); startLights(ev.n); } if (ev.e === 'go'){ big('GO!'); startLights(0); } if (ev.e === 'flash') gflash(ev.col);
       if (ev.e === 'hit') viewFlash({ i:e[2] }); }
     else race.replay(e);
   }

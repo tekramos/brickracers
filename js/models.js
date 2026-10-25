@@ -1,178 +1,190 @@
 /* ============================================================
-   Cartoon brick models: toon materials with a 3-step ramp, black inverted-hull outlines,
-   karts with a minifigure driver, pickup bricks and scenery. Everything is built from
-   primitives, so there are no model files to load.
+   TekRacers models: low-poly, flat-shaded shapes with neon accents.
+   Sleek open-wheel race karts (no drivers), energy-core pickups and canyon scenery,
+   all built from primitives so there are no model files to load.
    ============================================================ */
 import * as THREE from 'three';
 
 export const COLORS = {
-  red:'#e3242b', yellow:'#ffcd03', blue:'#1e6fe8', green:'#2fb24c', white:'#f4f4f4',
-  black:'#1b1b22', gray:'#9ba1ad', dark:'#4a4f5c', skin:'#ffd21f', brown:'#7b4a26', orange:'#ff7a12', tan:'#e8c88a', lime:'#9bd61f',
+  red:'#ff3b4e', yellow:'#ffc21a', blue:'#2f8bff', green:'#28e07a', white:'#f2f4ff',
+  black:'#121318', gray:'#8a90a0', dark:'#2a2d38', carbon:'#1a1c24', steel:'#b8bfcc', orange:'#ff8a2a',
+  rock:'#b85c38', rock2:'#d9814f', rock3:'#8e4430', sand:'#e9a86a', pine:'#2f6b4a', cyan:'#3ff6ff', magenta:'#ff3df2',
 };
-export const PLAYER_COLORS = ['#e3242b', '#1e6fe8', '#ffcd03', '#2fb24c', '#ff7a12'];
+// kart paint for the 5 players
+export const PLAYER_COLORS = ['#ff3b4e', '#2f8bff', '#ffc21a', '#28e07a', '#b26bff'];
 
-// three tones: shadow, mid, lit (nearest filtering gives the hard cartoon bands)
-const ramp = (() => {
-  const d = new Uint8Array([90, 90, 90, 255, 180, 180, 180, 255, 255, 255, 255, 255]);
-  const t = new THREE.DataTexture(d, 3, 1, THREE.RGBAFormat);
-  t.minFilter = t.magFilter = THREE.NearestFilter; t.generateMipmaps = false; t.needsUpdate = true; return t;
-})();
 const mats = new Map();
-export function toon(color, opts){
+// flat-shaded standard material (cached by colour and options)
+export function mat(color, opts){
   const key = color + (opts ? JSON.stringify(opts) : '');
-  if (!mats.has(key)) mats.set(key, new THREE.MeshToonMaterial(Object.assign({ color:new THREE.Color(color), gradientMap:ramp }, opts || {})));
+  if (!mats.has(key)) mats.set(key, new THREE.MeshStandardMaterial(Object.assign({ color:new THREE.Color(color), roughness:.75, metalness:.05, flatShading:true }, opts || {})));
   return mats.get(key);
 }
-export const basic = (() => { const m = new Map(); return (color, opts) => { const k = color + (opts ? JSON.stringify(opts) : ''); if (!m.has(k)) m.set(k, new THREE.MeshBasicMaterial(Object.assign({ color:new THREE.Color(color) }, opts || {}))); return m.get(k); }; })();
-const outlineMat = new THREE.MeshBasicMaterial({ color:0x111118, side:THREE.BackSide });
-
-// a black shell slightly bigger than the mesh, drawn inside out: the classic cartoon outline
-export function outline(mesh, px = .06){
-  const g = mesh.geometry; if (!g.boundingBox) g.computeBoundingBox();
-  const s = new THREE.Vector3(); g.boundingBox.getSize(s);
-  const o = new THREE.Mesh(g, outlineMat);
-  o.scale.set(1 + 2 * px / Math.max(s.x, .05), 1 + 2 * px / Math.max(s.y, .05), 1 + 2 * px / Math.max(s.z, .05));
-  o.raycast = () => {}; mesh.add(o); return mesh;
-}
+// glowing parts: unlit and bright
+export const glow = (() => { const m = new Map(); return (color, opts) => { const k = color + (opts ? JSON.stringify(opts) : ''); if (!m.has(k)) m.set(k, new THREE.MeshBasicMaterial(Object.assign({ color:new THREE.Color(color) }, opts || {}))); return m.get(k); }; })();
+export const basic = glow;
+export const paint = color => mat(color, { roughness:.32, metalness:.25 });
 
 const geo = new Map();
 const G = (key, make) => { if (!geo.has(key)) geo.set(key, make()); return geo.get(key); };
 const box = (w, h, d) => G(`b${w},${h},${d}`, () => new THREE.BoxGeometry(w, h, d));
 const cyl = (rt, rb, h, n = 16) => G(`c${rt},${rb},${h},${n}`, () => new THREE.CylinderGeometry(rt, rb, h, n));
-const sph = (r, n = 16) => G(`s${r},${n}`, () => new THREE.SphereGeometry(r, n, Math.max(8, n * .6 | 0)));
-
-export function part(g, color, x = 0, y = 0, z = 0, line = .05){
-  const m = new THREE.Mesh(g, typeof color === 'string' ? toon(color) : color);
-  m.position.set(x, y, z); if (line) outline(m, line); return m;
-}
-// studs on top of a w x d brick (in stud units, 1 stud = .8)
-export function studs(parent, color, w, d, y, x0 = 0, z0 = 0, size = .8){
-  const g = cyl(size * .3, size * .3, size * .22, 12);
-  for (let i = 0; i < w; i++) for (let j = 0; j < d; j++)
-    parent.add(part(g, color, x0 + (i - (w - 1) / 2) * size, y + size * .11, z0 + (j - (d - 1) / 2) * size, .03));
+export function part(g, material, x = 0, y = 0, z = 0){
+  const m = new THREE.Mesh(g, typeof material === 'string' ? mat(material) : material);
+  m.position.set(x, y, z); return m;
 }
 
-/* ---------- minifigure driver (seated) ---------- */
-export function minifig(color, helmet){
-  const f = new THREE.Group();
-  const legs = part(box(1.0, .45, 1.1), COLORS.dark, 0, .25, .35); f.add(legs);
-  const hips = part(box(1.0, .3, .5), COLORS.dark, 0, .45, -.05); f.add(hips);
-  // torso: a trapezoid made from a 4-sided cylinder
-  const tg = G('torso', () => { const g = new THREE.CylinderGeometry(.42, .62, 1.0, 4, 1); g.rotateY(Math.PI / 4); g.scale(1, 1, .62); return g; });
-  const torso = part(tg, color, 0, 1.1, -.05); f.add(torso);
-  // a white racing stripe on the chest
-  torso.add(part(box(.18, .9, .05), COLORS.white, 0, 0, .3, 0));
-  const arm = side => { const a = new THREE.Group(); a.position.set(side * .58, 1.42, -.05);
-    a.add(part(box(.26, .7, .3), color, 0, -.3, .12)); a.add(part(cyl(.13, .13, .16, 10), COLORS.skin, 0, -.66, .32));
-    a.rotation.x = -.9; return a; };
-  f.add(arm(-1), arm(1));
-  const head = new THREE.Group(); head.position.y = 1.9; f.add(head); f.userData.head = head;
-  head.add(part(cyl(.36, .36, .6, 20), COLORS.skin, 0, 0, 0));
-  // face: two eyes and a smile
-  for (const s of [-1, 1]) head.add(part(sph(.055, 8), COLORS.black, s * .13, .08, .34, 0));
-  const smile = new THREE.Mesh(G('smile', () => new THREE.TorusGeometry(.15, .03, 6, 12, Math.PI)), toon(COLORS.black)); smile.rotation.z = Math.PI; smile.position.set(0, -.05, .345); head.add(smile);
-  // helmet with a visor
-  const hm = new THREE.Mesh(G('helmet', () => new THREE.SphereGeometry(.46, 20, 12, 0, Math.PI * 2, 0, Math.PI * .55)), toon(helmet || color)); hm.position.y = .05; outline(hm, .04); head.add(hm);
-  head.add(part(box(.75, .14, .25), COLORS.black, 0, .24, .3, .02));
-  return f;
+// a soft round shadow texture shared by everything that sits on the ground
+export const blobTex = (() => {
+  const c = document.createElement('canvas'); c.width = c.height = 64; const g = c.getContext('2d');
+  const r = g.createRadialGradient(32, 32, 2, 32, 32, 32); r.addColorStop(0, 'rgba(0,0,0,.55)'); r.addColorStop(.6, 'rgba(0,0,0,.25)'); r.addColorStop(1, 'rgba(0,0,0,0)');
+  g.fillStyle = r; g.fillRect(0, 0, 64, 64); const t = new THREE.CanvasTexture(c); return t;
+})();
+export function blob(w, d){
+  const m = new THREE.Mesh(G('blobG', () => new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2)), G('blobM', () => new THREE.MeshBasicMaterial({ map:blobTex, transparent:true, depthWrite:false })));
+  m.scale.set(w, 1, d); m.renderOrder = 1; return m;
 }
 
-/* ---------- kart ---------- */
-// forward is +Z. Returns a group with handles for wheels, driver and the shield bubble.
-export function kart(color, driverColor, style = 0){
+/* ---------- race kart ---------- */
+// The body is a side profile (z forward, y up) extruded across the width.
+function bodyGeo(){
+  return G('kbody', () => {
+    const s = new THREE.Shape();
+    s.moveTo(2.25, .42); s.lineTo(2.35, .62); s.lineTo(1.2, .82); s.lineTo(.55, 1.02); s.lineTo(-.6, 1.12); s.lineTo(-1.6, 1.02); s.lineTo(-2.05, .8); s.lineTo(-2.0, .42); s.closePath();
+    const g = new THREE.ExtrudeGeometry(s, { depth:1.3, bevelEnabled:true, bevelSize:.12, bevelThickness:.12, bevelSegments:1 });
+    g.translate(0, 0, -.65); g.rotateY(-Math.PI / 2); // profile x -> world z
+    return g;
+  });
+}
+function podGeo(){
+  return G('kpod', () => {
+    const s = new THREE.Shape();
+    s.moveTo(1.0, .35); s.lineTo(.6, .78); s.lineTo(-1.2, .82); s.lineTo(-1.45, .35); s.closePath();
+    const g = new THREE.ExtrudeGeometry(s, { depth:.5, bevelEnabled:false }); g.translate(0, 0, -.25); g.rotateY(-Math.PI / 2); return g;
+  });
+}
+// forward is +Z. Returns a group with handles for wheels, the shield bubble, flames and the shadow.
+export function kart(color, accent, style = 0){
   const k = new THREE.Group(), body = new THREE.Group(); k.add(body); k.userData.body = body;
-  const dark = new THREE.Color(color).multiplyScalar(.6).getStyle();
-  body.add(part(box(2.4, .4, 3.8), color, 0, .55, 0));               // chassis plate
-  studs(body, color, 2, 1, .75, 0, 1.45);
-  body.add(part(box(2.0, .55, .9), color, 0, .78, 1.7));             // nose
-  body.add(part(box(1.6, .2, .3), COLORS.black, 0, .62, 2.2, .03));  // grille
-  for (const s of [-1, 1]) body.add(part(box(.5, .5, 1.8), dark, s * 1.15, .85, -.1)); // side pods
-  body.add(part(box(1.3, .25, 1.2), COLORS.dark, 0, .85, -.2));      // seat
-  body.add(part(box(1.3, .9, .3), COLORS.dark, 0, 1.25, -.85));      // seat back
-  body.add(part(box(1.6, .7, .9), COLORS.gray, 0, 1.05, -1.5));      // engine
-  studs(body, COLORS.gray, 2, 1, 1.4, 0, -1.5);
-  for (const s of [-1, 1]){ const p = part(cyl(.15, .15, .8, 10), COLORS.white, s * .55, 1.0, -2.05); p.rotation.x = Math.PI / 2 - .3; body.add(p); }
-  // spoiler: some karts get a tall wing, some a flat one
-  if (style % 2 === 0){
-    for (const s of [-1, 1]) body.add(part(box(.15, .8, .2), COLORS.black, s * .8, 1.6, -1.8, .03));
-    body.add(part(box(2.4, .18, .7), color, 0, 2.05, -1.85));
-  } else body.add(part(box(2.2, .3, .5), color, 0, 1.55, -1.95));
-  // steering wheel
-  const sw = part(G('wheelring', () => new THREE.TorusGeometry(.28, .06, 6, 14)), COLORS.black, 0, 1.25, .65, 0); sw.rotation.x = -.6; body.add(sw);
-  // driver
-  const d = minifig(driverColor, color); d.position.set(0, .7, -.25); body.add(d); k.userData.driver = d;
-  // wheels: black tyres with white hubs
+  const pc = paint(color), dark = paint(new THREE.Color(color).multiplyScalar(.45).getStyle()), carbon = mat(COLORS.carbon, { roughness:.5, metalness:.3 });
+  const neon = glow(new THREE.Color(accent || color).lerp(new THREE.Color('#ffffff'), .35).getStyle());
+  body.add(part(box(2.2, .22, 3.9), carbon, 0, .36, 0));                       // floor pan
+  body.add(new THREE.Mesh(bodyGeo(), pc));                                      // main body
+  for (const s of [-1, 1]){
+    const pod = new THREE.Mesh(podGeo(), dark); pod.position.x = s * 1.0; body.add(pod);
+    body.add(part(box(.06, .07, 2.0), neon, s * 1.27, .62, -.25));               // neon stripe along the pod
+  }
+  // canopy: smoked glass bubble
+  const can = new THREE.Mesh(G('canopy', () => new THREE.SphereGeometry(1, 14, 8, 0, Math.PI * 2, 0, Math.PI / 2)), mat('#0d1424', { roughness:.08, metalness:.6 }));
+  can.scale.set(.62, .5, 1.15); can.position.set(0, 1.05, .05); body.add(can);
+  body.add(part(box(.14, .5, 1.0), pc, 0, 1.25, -1.15));                        // air intake fin
+  // front wing with end plates
+  body.add(part(box(2.7, .08, .55), carbon, 0, .4, 2.25));
+  for (const s of [-1, 1]) body.add(part(box(.07, .3, .6), pc, s * 1.35, .5, 2.25));
+  // rear wing: tall or low depending on the kart
+  const wy = style % 2 ? 1.45 : 1.75;
+  for (const s of [-1, 1]) body.add(part(box(.1, wy - .8, .25), carbon, s * .55, (wy + .8) / 2, -1.85));
+  body.add(part(box(2.6, .1, .7), pc, 0, wy, -1.9));
+  body.add(part(box(2.6, .05, .05), neon, 0, wy + .07, -1.56));
+  for (const s of [-1, 1]) body.add(part(box(.07, .45, .8), carbon, s * 1.3, wy - .1, -1.9));
+  // exhausts with hot cores, head and tail lights
+  for (const s of [-1, 1]){
+    const ex = part(cyl(.14, .17, .5, 10), mat(COLORS.steel, { roughness:.3, metalness:.8 }), s * .4, .78, -2.12); ex.rotation.x = Math.PI / 2; body.add(ex);
+    const hot = part(cyl(.09, .09, .02, 10), glow('#ffb347'), s * .4, .78, -2.38); hot.rotation.x = Math.PI / 2; body.add(hot);
+    body.add(part(box(.35, .08, .05), glow('#ffffff'), s * .55, .62, 2.36));
+    body.add(part(box(.4, .08, .05), glow('#ff2a3a'), s * .7, .78, -2.06));
+  }
+  // underglow in the kart's accent colour
+  const ug = new THREE.Mesh(G('ugG', () => new THREE.PlaneGeometry(2.6, 4.4).rotateX(-Math.PI / 2)), new THREE.MeshBasicMaterial({ color:new THREE.Color(accent || color), transparent:true, opacity:.35, depthWrite:false, blending:THREE.AdditiveBlending, map:blobTex }));
+  ug.position.y = .08; k.add(ug);
+  // wheels: open, with machined rims
   k.userData.wheels = [];
   const tyre = G('tyre', () => { const g = new THREE.CylinderGeometry(1, 1, 1, 18); g.rotateZ(Math.PI / 2); return g; });
+  const rimG = G('rim', () => { const g = new THREE.CylinderGeometry(1, 1, 1, 6); g.rotateZ(Math.PI / 2); return g; });
   const wheel = (x, z, r, w) => { const g = new THREE.Group(); g.position.set(x, r, z);
-    const t = part(tyre, COLORS.black, 0, 0, 0, .04); t.scale.set(w, r, r); g.add(t);
-    const h = part(tyre, COLORS.white, x > 0 ? w * .3 : -w * .3, 0, 0, 0); h.scale.set(w * .5, r * .55, r * .55); g.add(h);
+    const spin = new THREE.Group(); g.add(spin);
+    const t = part(tyre, mat('#16171c', { roughness:.9 })); t.scale.set(w, r, r); spin.add(t);
+    const rim = part(rimG, mat(COLORS.steel, { roughness:.25, metalness:.85 }), x > 0 ? w * .08 : -w * .08, 0, 0); rim.scale.set(w * .9, r * .62, r * .62); spin.add(rim);
+    const hub = part(rimG, dark, x > 0 ? w * .12 : -w * .12, 0, 0); hub.scale.set(w * .9, r * .22, r * .22); spin.add(hub);
     k.add(g); k.userData.wheels.push(g); return g; };
-  k.userData.front = [wheel(-1.35, 1.35, .5, .5), wheel(1.35, 1.35, .5, .5)];
-  wheel(-1.4, -1.35, .62, .62); wheel(1.4, -1.35, .62, .62);
+  k.userData.front = [wheel(-1.35, 1.45, .48, .5), wheel(1.35, 1.45, .48, .5)];
+  wheel(-1.42, -1.35, .62, .7); wheel(1.42, -1.35, .62, .7);
   // shield bubble (hidden until used)
-  const sh = new THREE.Mesh(sph(2.8, 20), new THREE.MeshBasicMaterial({ color:0x6fd0ff, transparent:true, opacity:.28, depthWrite:false }));
-  sh.position.y = 1.2; sh.visible = false; k.add(sh); k.userData.shield = sh;
-  // blob shadow
-  const bl = new THREE.Mesh(G('blob', () => new THREE.CircleGeometry(2.2, 20).rotateX(-Math.PI / 2)), new THREE.MeshBasicMaterial({ color:0x000000, transparent:true, opacity:.28, depthWrite:false }));
-  bl.position.y = .06; bl.scale.set(1, 1, 1.3); k.add(bl); k.userData.blob = bl;
+  const sh = new THREE.Mesh(G('shield', () => new THREE.IcosahedronGeometry(3, 1)), new THREE.MeshBasicMaterial({ color:0x6fd0ff, transparent:true, opacity:.22, depthWrite:false, wireframe:false, blending:THREE.AdditiveBlending }));
+  sh.position.y = 1.1; sh.visible = false; k.add(sh); k.userData.shield = sh;
+  const bl = blob(4.2, 6); bl.position.y = .06; k.add(bl); k.userData.blob = bl;
   // boost flames
-  const fl = new THREE.Group(); fl.position.set(0, 1.0, -2.4);
-  for (const s of [-1, 1]){ const c = new THREE.Mesh(G('flame', () => new THREE.ConeGeometry(.28, 1.4, 8).rotateX(-Math.PI / 2)), basic(COLORS.orange)); c.position.x = s * .55; fl.add(c);
-    const c2 = new THREE.Mesh(G('flame2', () => new THREE.ConeGeometry(.15, .9, 8).rotateX(-Math.PI / 2)), basic('#fff36b')); c2.position.set(s * .55, 0, .1); fl.add(c2); }
+  const fl = new THREE.Group(); fl.position.set(0, .78, -2.5);
+  for (const s of [-1, 1]){ const c = new THREE.Mesh(G('flame', () => new THREE.ConeGeometry(.2, 1.6, 8).rotateX(-Math.PI / 2)), glow('#4fd2ff', { transparent:true, opacity:.85, blending:THREE.AdditiveBlending, depthWrite:false })); c.position.x = s * .4; fl.add(c);
+    const c2 = new THREE.Mesh(G('flame2', () => new THREE.ConeGeometry(.1, 1.0, 8).rotateX(-Math.PI / 2)), glow('#ffffff')); c2.position.set(s * .4, 0, .15); fl.add(c2); }
   fl.visible = false; k.add(fl); k.userData.flames = fl;
   return k;
 }
 
-/* ---------- pickup brick: a 2x2 brick with studs ---------- */
-export function brick(color){
+/* ---------- energy core pickup: a spinning crystal in a ring ---------- */
+export function core(color){
   const b = new THREE.Group();
-  b.add(part(box(1.6, 1.0, 1.6), color, 0, 0, 0, .06));
-  studs(b, color, 2, 2, .5);
+  const white = color === COLORS.white;
+  const shell = new THREE.Mesh(G('coreG', () => new THREE.OctahedronGeometry(1.05, 0)), mat(color, { roughness:.2, metalness:.1, emissive:new THREE.Color(color), emissiveIntensity:.55, transparent:true, opacity:.88 }));
+  shell.scale.y = 1.35; b.add(shell);
+  const inner = new THREE.Mesh(G('coreIn', () => new THREE.OctahedronGeometry(.45, 0)), glow('#ffffff')); inner.scale.y = 1.35; b.add(inner);
+  const ring = new THREE.Mesh(G('coreRing', () => new THREE.TorusGeometry(1.55, .07, 6, 28)), glow(white ? '#ffffff' : color)); ring.rotation.x = Math.PI / 2; b.add(ring);
+  b.userData.ring = ring; b.userData.shell = shell;
   return b;
 }
 
-/* ---------- scenery ---------- */
-export function tree(rng){
-  const t = new THREE.Group(), h = 2 + rng() * 2;
-  t.add(part(box(.9, h, .9), COLORS.brown, 0, h / 2, 0));
-  const g = ['#2fb24c', '#3fa63a', '#5cc23c'][rng() * 3 | 0];
-  const layers = 2 + (rng() * 2 | 0);
-  for (let i = 0; i < layers; i++){ const s = 4.2 - i * 1.1; const l = part(box(s, 1.3, s), g, 0, h + .6 + i * 1.3, 0); t.add(l); }
-  studs(t, g, 2, 2, h + .6 + (layers - 1) * 1.3 + .65, 0, 0, 1.0);
-  return t;
+/* ---------- canyon scenery ---------- */
+function jitter(g, amt, rng){
+  const p = g.attributes.position, seen = new Map();
+  for (let i = 0; i < p.count; i++){
+    const k = p.getX(i).toFixed(3) + ',' + p.getY(i).toFixed(3) + ',' + p.getZ(i).toFixed(3);
+    if (!seen.has(k)) seen.set(k, [(rng() - .5) * amt, (rng() - .5) * amt, (rng() - .5) * amt]);
+    const d = seen.get(k); p.setXYZ(i, p.getX(i) + d[0], p.getY(i) + d[1], p.getZ(i) + d[2]);
+  }
+  g.computeVertexNormals(); return g;
 }
-export function palm(rng){
-  const t = new THREE.Group(), n = 6 + (rng() * 3 | 0), lean = (rng() - .5) * .5;
-  for (let i = 0; i < n; i++) t.add(part(cyl(.42, .5, .9, 8), i % 2 ? COLORS.brown : '#8e5a2e', lean * i * .8, .45 + i * .9, 0, .04));
-  const top = new THREE.Group(); top.position.set(lean * n * .8, n * .9 + .2, 0); t.add(top);
-  for (let i = 0; i < 6; i++){ const a = i / 6 * Math.PI * 2, leaf = part(box(.9, .15, 3.6), '#3fbf3a', 0, 0, 0, .04);
-    leaf.position.set(Math.sin(a) * 1.6, -.3, Math.cos(a) * 1.6); leaf.rotation.set(.35, a, 0); top.add(leaf); }
-  top.add(part(sph(.4, 8), COLORS.brown, .3, -.3, 0, .03), part(sph(.4, 8), COLORS.brown, -.3, -.4, .2, .03));
-  return t;
+const ROCKS = [COLORS.rock, COLORS.rock2, COLORS.rock3, '#c96f45'];
+export function rock(rng, s = 1){
+  const g = jitter(new THREE.IcosahedronGeometry(1, 0), .5, rng);
+  const r = new THREE.Mesh(g, mat(ROCKS[rng() * ROCKS.length | 0]));
+  const k = (1 + rng() * 2.5) * s; r.scale.set(k * (.8 + rng() * .6), k * (.5 + rng() * .5), k * (.8 + rng() * .6)); r.position.y = k * .25; r.rotation.y = rng() * 6;
+  return r;
 }
-export function house(rng, wall, roof){
-  const h = new THREE.Group(), w = 7 + rng() * 4, d = 6 + rng() * 3, hh = 4 + rng() * 2;
-  h.add(part(box(w, hh, d), wall, 0, hh / 2, 0, .08));
-  // roof from a 3-sided prism
-  const r = new THREE.Mesh(G(`roof${w | 0},${d | 0}`, () => { const g = new THREE.CylinderGeometry(1, 1, w + .8, 3); g.rotateZ(Math.PI / 2); g.scale(1, (d * .45), d * .62); return g; }), toon(roof));
-  r.position.y = hh + d * .2; outline(r, .08); h.add(r);
-  h.add(part(box(1.4, 2.4, .3), COLORS.brown, 0, 1.2, d / 2 + .05, .04));
-  for (const s of [-1, 1]){ h.add(part(box(1.4, 1.2, .2), '#9fe3ff', s * w * .3, hh * .6, d / 2 + .05, .04)); }
-  return h;
+// a layered table-top mesa
+export function mesa(rng){
+  const m = new THREE.Group(), r = 14 + rng() * 22, h = 18 + rng() * 30, n = 2 + (rng() * 2 | 0);
+  let y = 0;
+  for (let i = 0; i < n; i++){
+    const hh = h / n * (i === n - 1 ? 1.1 : 1), rt = r * (1 - (i + 1) * .16), rb = r * (1 - i * .16);
+    const c = new THREE.Mesh(jitter(new THREE.CylinderGeometry(rt, rb, hh, 7 + (rng() * 3 | 0), 1), 2.5, rng), mat(ROCKS[(i + (rng() * 2 | 0)) % ROCKS.length]));
+    c.position.y = y + hh / 2; m.add(c); y += hh;
+  }
+  m.rotation.y = rng() * 6; return m;
 }
-export function rock(rng){
-  const r = part(G('rock', () => new THREE.DodecahedronGeometry(1, 0)), ['#8b8f99', '#a2a6ae', '#7d818c'][rng() * 3 | 0], 0, .5, 0, .06);
-  const s = 1 + rng() * 2.5; r.scale.set(s, s * (.6 + rng() * .4), s); r.rotation.y = rng() * 6; return r;
+export function pine(rng){
+  const t = new THREE.Group(), h = 1 + rng() * 1.2;
+  t.add(part(cyl(.25, .35, 2 * h, 6), mat('#5a3a26'), 0, h, 0));
+  const tones = ['#2f6b4a', '#3a7d52', '#285c40'], c = tones[rng() * 3 | 0];
+  for (let i = 0; i < 3; i++) t.add(part(G('pine' + i, () => new THREE.ConeGeometry(2.4 - i * .6, 2.6, 7)), mat(c), 0, 2 * h + .6 + i * 1.5, 0));
+  t.scale.setScalar(1.2 + rng() * .8); return t;
 }
-export function cloud(rng){
-  const c = new THREE.Group(), n = 3 + (rng() * 3 | 0);
-  for (let i = 0; i < n; i++){ const p = new THREE.Mesh(sph(3 + rng() * 3, 12), toon('#ffffff')); p.position.set(i * 4 - n * 2, rng() * 2, rng() * 3); c.add(p); }
-  return c;
+export function cactus(rng){
+  const t = new THREE.Group(), h = 3 + rng() * 3, m = mat('#4f8a4a');
+  t.add(part(cyl(.45, .5, h, 7), m, 0, h / 2, 0));
+  for (const s of [-1, 1]) if (rng() < .8){ const y = h * (.35 + rng() * .3), a = 1 + rng();
+    t.add(part(cyl(.3, .3, 1, 6), m, s * .8, y, 0).rotateZ(Math.PI / 2));
+    t.add(part(cyl(.3, .3, a, 6), m, s * 1.2, y + a / 2, 0)); }
+  t.rotation.y = rng() * 6; return t;
 }
-export function flag(color){
-  const f = new THREE.Group();
-  f.add(part(cyl(.12, .12, 6, 8), COLORS.white, 0, 3, 0, .03));
-  const cloth = part(box(2.4, 1.4, .08), color, 1.2, 5.2, 0, .03); f.add(cloth); f.userData.cloth = cloth;
-  return f;
+export function shrub(rng){
+  const s = new THREE.Mesh(jitter(new THREE.IcosahedronGeometry(1, 0), .4, rng), mat(['#8a8f4a', '#6f7a3c', '#a39552'][rng() * 3 | 0]));
+  const k = .8 + rng() * 1.2; s.scale.set(k, k * .6, k); s.position.y = k * .3; return s;
+}
+// a light tower with a glowing head
+export function pylon(color){
+  const p = new THREE.Group();
+  p.add(part(cyl(.22, .32, 9, 6), mat(COLORS.dark, { metalness:.5, roughness:.4 }), 0, 4.5, 0));
+  p.add(part(box(1.8, .3, .5), mat(COLORS.dark), 0, 9, 0));
+  p.add(part(box(1.6, .18, .52), glow(color), 0, 8.85, 0));
+  return p;
 }

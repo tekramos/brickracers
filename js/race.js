@@ -1,14 +1,14 @@
 /* ============================================================
-   One race: kart driving, laps and positions, brick pickups, power-ups, AI drivers and effects.
-   Power-ups work like the classic brick racer: a colour brick picks the kind of power-up,
-   white bricks (up to 3) make it stronger, and using it spends them all.
+   One race: kart driving, laps and positions, energy-core pickups, power-ups, AI drivers and effects.
+   Power-ups: a colour core picks the kind of power-up,
+   white cores (up to 3) make it stronger, and using it spends them all.
      red    : cannon ball · homing missile · twin missiles · lightning on everyone ahead
      yellow : oil slick · mine · mine field · shockwave around you
      blue   : shield · long shield · spike shield (spins karts you touch) · super shield
      green  : turbo · big turbo · mega turbo · warp forward
    ============================================================ */
 import * as THREE from 'three';
-import { kart, brick, toon, basic, COLORS } from './models.js';
+import { kart, core, mat, basic, blob, COLORS } from './models.js';
 import { HALF_W } from './track.js';
 import { Snd } from './audio.js';
 
@@ -20,7 +20,7 @@ export const PU = {
 };
 const KINDS = ['red', 'yellow', 'blue', 'green'];
 const MAX_SPEED = 40, ACCEL = 24, BRAKE = 50, REVERSE = 12, TURN = 2.0, GRIP = 7, LIM = HALF_W - 1.5, KART_R = 1.7;
-export const AI_NAMES = ['Cap\'n Stud', 'Rita Rocket', 'Baron Bolt', 'Kiki Tiki', 'Sir Plate'];
+export const AI_NAMES = ['Vex', 'Nova', 'Raze', 'Kairo', 'Zenit'];
 const START = 4; // sample index of the start line
 
 const wrapPi = a => { while (a > Math.PI) a -= Math.PI * 2; while (a < -Math.PI) a += Math.PI * 2; return a; };
@@ -55,7 +55,7 @@ export class Race {
     return k;
   }
 
-  /* ---------- bricks ---------- */
+  /* ---------- energy cores (pickups) ---------- */
   placeBricks(){
     const t = this.track;
     for (const f of [.1, .27, .44, .6, .76, .9]){
@@ -69,9 +69,8 @@ export class Race {
   spawnBrick(b, color){
     if (b.mesh) this.root.remove(b.mesh);
     b.color = color || (Math.random() < .3 ? 'white' : KINDS[Math.random() * 4 | 0]);
-    b.mesh = brick(COLORS[b.color]); b.mesh.position.copy(b.pos); b.mesh.position.y += 1.4; this.root.add(b.mesh);
-    const bl = new THREE.Mesh(new THREE.CircleGeometry(1.2, 16).rotateX(-Math.PI / 2), basic('#000000', { transparent:true, opacity:.22, depthWrite:false }));
-    bl.position.y = -1.3; b.mesh.add(bl);
+    b.mesh = core(COLORS[b.color]); b.mesh.position.copy(b.pos); b.mesh.position.y += 1.6; this.root.add(b.mesh);
+    const bl = blob(2.6, 2.6); bl.position.y = -1.5; b.mesh.add(bl); b.mesh.userData.shadow = bl;
     b.active = true;
   }
   collect(k, b){
@@ -143,7 +142,7 @@ export class Race {
       k.vx = nfx * fwd + nrx * lat; k.vz = nfz * fwd + nrz * lat;
       k.x += k.vx * dt; k.z += k.vz * dt;
     }
-    // stay on the road: the brick walls push back
+    // stay on the road: the barriers push back
     const loc = t.locate(k.x, k.z, k.idx);
     if (Math.abs(loc.side) > LIM){
       const s = Math.sign(loc.side), r = t.R[loc.i], over = Math.abs(loc.side) - LIM;
@@ -186,7 +185,6 @@ export class Race {
     k.wheel += fwd * rdt / .55;
     for (const w of m.userData.wheels) w.children[0].rotation.x = k.wheel;
     for (const w of m.userData.front) w.rotation.y = -k.steer * .45;
-    m.userData.driver.userData.head.rotation.y = -k.steer * .35;
     m.userData.shield.visible = k.shield > 0 && (k.shield > 1 || Math.sin(this.time * 30) > 0);
     if (m.userData.shield.visible){ m.userData.shield.material.color.set(k.shieldLvl >= 2 ? '#ff9de2' : '#6fd0ff'); m.userData.shield.rotation.y += rdt * 2; }
     const fl = m.userData.flames; fl.visible = k.boost > 0; if (fl.visible) fl.scale.set(1, 1, .7 + Math.random() * .6);
@@ -208,7 +206,7 @@ export class Race {
   think(k, dt){
     const a = k.ai, t = this.track;
     a.laneT -= dt; if (a.laneT <= 0){ a.laneT = 1.5 + Math.random() * 3; a.lane = clamp(a.lane + (Math.random() - .5) * 6, -5.5, 5.5); }
-    // go for a brick in the next row when it has nothing to use yet
+    // go for a core in the next row when it has nothing to use yet
     if (!k.pu || k.w < 3){
       for (const b of this.bricks){ const ahead = t.wrap(b.idx - k.idx); if (b.active && ahead > 6 && ahead < 45 && (!k.pu || b.color === 'white')){ a.lane = b.side; break; } }
     }
@@ -348,7 +346,7 @@ export class Race {
     if (type === 'spin'){ k.spin = soft ? .9 : 1.2; }
     else { k.flip = 1.4; k.vx *= .3; k.vz *= .3; }
     k.inv = type === 'flip' ? 1.8 : 1.3; k.warped = false;
-    // bricks fly off the kart
+    // sparks fly off the kart
     this.burst(k.x, k.y + 1.2, k.z, k.pl.color, 8, 12, 'brick');
     this.snd('spin', k); if (k.pl.kind !== 'ai') k.pl.notify({ e:'hit' });
   }
@@ -378,11 +376,11 @@ export class Race {
     }
   }
 
-  /* ---------- effects: brick shards, puffs, rings and bolts ---------- */
+  /* ---------- effects: shards, puffs, rings and bolts ---------- */
   burst(x, y, z, color, n, speed, kind = 'shard'){
     if (this.log) this.log.push(['f', +x.toFixed(1), +y.toFixed(1), +z.toFixed(1), color, n, speed, kind]);
     for (let i = 0; i < n; i++){
-      const m = new THREE.Mesh(kind === 'puff' ? Race.puffG : Race.shardG, kind === 'puff' ? toon('#ffffff') : toon(color));
+      const m = new THREE.Mesh(kind === 'puff' ? Race.puffG : Race.shardG, kind === 'puff' ? mat('#ffffff', { roughness:1 }) : mat(color, { emissive:new THREE.Color(color), emissiveIntensity:.6 }));
       m.position.set(x, y, z); const s = kind === 'puff' ? .5 + Math.random() * .5 : .6 + Math.random() * .5; m.scale.setScalar(s);
       this.root.add(m);
       const a = Math.random() * Math.PI * 2, up = kind === 'puff' ? 1 + Math.random() : 4 + Math.random() * 8;
@@ -399,7 +397,6 @@ export class Race {
       else if (f.kind === 'bolt'){ f.mesh.visible = Math.sin(f.life * 80) > -.3; }
       if (f.life <= 0){ this.root.remove(f.mesh); if (f.kind === 'bolt' || f.kind === 'ring') f.mesh.geometry.dispose(); this.fx.splice(this.fx.indexOf(f), 1); }
     }
-    for (const fl of this.track.flags || []) fl.userData.cloth.rotation.y = Math.sin(this.time * 4 + fl.position.x) * .25;
   }
 
   rank(){
@@ -413,6 +410,8 @@ export class Race {
     const wantL = new THREE.Vector3(k.x + f.x * 6 * back, k.y + 1.4, k.z + f.z * 6 * back);
     const a = 1 - Math.exp(-dt * (k.look > 0 ? 30 : 7));
     k.camPos.lerp(wantP, a); k.camLook.lerp(wantL, 1 - Math.exp(-dt * 12));
+    // never dip into the hillsides (the tunnel has its own roof)
+    if (!this.track.inSlot(k.camPos.x, k.camPos.z)){ const g = this.track.height(k.camPos.x, k.camPos.z) + 1.5; if (k.camPos.y < g) k.camPos.y = g; }
     k.cam.position.copy(k.camPos); k.cam.lookAt(k.camLook);
     const fov = 68 + (k.boost > 0 ? 10 : 0) + Math.max(0, k.speed) * .1;
     if (Math.abs(k.cam.fov - fov) > .05){ k.cam.fov += (fov - k.cam.fov) * Math.min(1, dt * 5); k.cam.updateProjectionMatrix(); }
@@ -496,24 +495,25 @@ export class Race {
     for (const p of this.projectiles){ if (p.tx == null) continue; const a = 1 - Math.exp(-dt * 15);
       p.x += (p.tx - p.x) * a; p.y += (p.ty - p.y) * a; p.z += (p.tz - p.z) * a; p.h += wrapPi(p.th - p.h) * a; p.mesh.position.set(p.x, p.y, p.z); p.mesh.rotation.y = p.h; }
     for (const h of this.hazards) if (h.mesh.userData.light) h.mesh.userData.light.visible = Math.sin(this.time * 12) > 0;
-    for (const b of this.bricks) if (b.active && b.mesh){ b.mesh.rotation.y += dt * 2; b.mesh.position.y = b.pos.y + 1.4 + Math.sin(this.time * 3 + b.phase) * .3; }
+    for (const b of this.bricks) if (b.active && b.mesh){ const u = b.mesh.userData; u.shell.rotation.y += dt * 2; u.ring.rotation.z -= dt * 1.4; u.ring.rotation.x = Math.PI / 2 + Math.sin(this.time * 2 + b.phase) * .25;
+      const bob = Math.sin(this.time * 3 + b.phase) * .3; b.mesh.position.y = b.pos.y + 1.6 + bob; u.shadow.position.y = -1.5 - bob; }
     this.updateFx(dt);
     for (const k of this.karts) if (k.local) this.updateCam(k, dt);
   }
   static projMesh(kind){
     const mesh = new THREE.Group();
-    if (kind === 'cannon'){ mesh.add(new THREE.Mesh(new THREE.SphereGeometry(.7, 14, 10), toon(COLORS.black))); }
-    else { mesh.add(new THREE.Mesh(new THREE.CylinderGeometry(.35, .35, 2, 10).rotateX(Math.PI / 2), toon(COLORS.white)));
-      const nose = new THREE.Mesh(new THREE.ConeGeometry(.35, .7, 10).rotateX(Math.PI / 2), toon(COLORS.red)); nose.position.z = 1.3; mesh.add(nose);
-      const fin = new THREE.Mesh(new THREE.BoxGeometry(1.2, .1, .5), toon(COLORS.red)); fin.position.z = -.8; mesh.add(fin); }
+    if (kind === 'cannon'){ mesh.add(new THREE.Mesh(new THREE.SphereGeometry(.7, 14, 10), mat(COLORS.dark, { roughness:.3, metalness:.8 }))); }
+    else { mesh.add(new THREE.Mesh(new THREE.CylinderGeometry(.35, .35, 2, 10).rotateX(Math.PI / 2), mat(COLORS.steel, { roughness:.3, metalness:.7 })));
+      const nose = new THREE.Mesh(new THREE.ConeGeometry(.35, .7, 10).rotateX(Math.PI / 2), mat(COLORS.red, { emissive:new THREE.Color(COLORS.red), emissiveIntensity:.4 })); nose.position.z = 1.3; mesh.add(nose);
+      const fin = new THREE.Mesh(new THREE.BoxGeometry(1.2, .1, .5), mat(COLORS.red, { emissive:new THREE.Color(COLORS.red), emissiveIntensity:.4 })); fin.position.z = -.8; mesh.add(fin); }
     return mesh;
   }
   static hazardMesh(kind){
     if (kind === 'oil'){ const m = new THREE.Mesh(new THREE.CircleGeometry(3, 20).rotateX(-Math.PI / 2), basic('#15121c')); m.scale.set(1, 1, .8); return m; }
-    const mesh = new THREE.Group(); mesh.add(new THREE.Mesh(new THREE.SphereGeometry(.8, 14, 8, 0, Math.PI * 2, 0, Math.PI / 2), toon(COLORS.dark)));
+    const mesh = new THREE.Group(); mesh.add(new THREE.Mesh(new THREE.SphereGeometry(.8, 14, 8, 0, Math.PI * 2, 0, Math.PI / 2), mat(COLORS.dark, { roughness:.4, metalness:.6 })));
     const l = new THREE.Mesh(new THREE.SphereGeometry(.25, 8, 6), basic(COLORS.red)); l.position.y = .75; mesh.add(l); mesh.userData.light = l;
     return mesh;
   }
 }
-Race.shardG = new THREE.BoxGeometry(.8, .5, .8);
+Race.shardG = new THREE.TetrahedronGeometry(.55, 0);
 Race.puffG = new THREE.SphereGeometry(.8, 8, 6);
