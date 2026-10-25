@@ -1,6 +1,6 @@
 // Offline cache: game files first from the network (so updates show up), falling back to the cache.
-const CACHE = 'brickracers-v1';
-const FILES = ['./', 'index.html', 'pad.html', 'js/main.js', 'js/race.js', 'js/track.js', 'js/models.js', 'js/padhost.js', 'js/audio.js', 'manifest.webmanifest', 'pad.webmanifest', 'icons/icon.svg'];
+const CACHE = 'brickracers-v2';
+const FILES = ['./', 'index.html', 'pad.html', 'js/main.js', 'js/race.js', 'js/track.js', 'js/models.js', 'js/padhost.js', 'js/net.js', 'js/audio.js', 'manifest.webmanifest', 'pad.webmanifest', 'icons/icon.svg'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
 self.addEventListener('fetch', e => {
