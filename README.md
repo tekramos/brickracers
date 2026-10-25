@@ -1,16 +1,38 @@
 # TekRacers
 
-A neon canyon kart racer for up to 5 players: sleek race karts, a sunset desert circuit with a steel bridge over the river canyon and a tunnel through the mountain.
+A cosy park kart racer for up to 5 players: chunky little buggies racing round a hand-made park diorama, with a stone bridge over the river, a tunnel through the hill, blossom trees, swaying grass and lamps that glow at night.
 The race runs in the browser on a big screen; every player uses their phone as the controller.
 Built with three.js (WebGPU, falling back to WebGL 2 by itself).
 
 Created by **Tekramos** · [www.tekramos.com](https://www.tekramos.com)
 
+## The look
+
+The art direction follows Bruno Simon's [folio-2025](https://github.com/brunosimon/folio-2025) (MIT licence),
+and `js/look.js` rebuilds its techniques for this game with three.js TSL node materials:
+- one warm key light; faces turned away from it and cast shadows blend towards the surface colour tinted with a
+  deep shadow colour (purple at sunset), never grey
+- a screen-space colour gradient is both the sky and the fog, so the distance melts into it
+- grass as one camera-facing triangle per blade that sways in the wind and bends away from your kart
+- trees made of leaf cards cut out by a texture, shimmering in the wind
+- lights brighter than white, picked up by a bloom pass (one full-screen view on High graphics)
+- the ground painted from a data texture (paving, grass, water) and a height field
+- a see-through cut around your kart for anything above it, so the tunnel hill never hides you
+- pooled particles (dust, sparks, puffs) and tyre marks, so effects never stutter
+
+**Time of day** (lobby option): Day, Sunset, Night, Dawn, or a slow Cycle through all four.
+
 ## The circuit
 
-One lap is about 1.6 km through a sunset desert canyon: the start straight with the neon gantry and the grandstand,
-a long climb onto a red steel arch bridge over the river canyon, a sweeping desert section, and a curved tunnel
-lit by neon strips straight through the mountain.
+One lap is about 1.6 km round a park: the start straight with the gantry and the grandstand, a climb onto the stone
+bridge over the river, sweeping bends past the pond and the blossom groves, and a curved tunnel through the hill.
+
+## Driving
+
+- Hold **brake while steering** at speed to drift. Hold the drift: the sparks turn blue, then orange, and letting go
+  fires a mini turbo.
+- The **camera** (lobby option, or the C key) is either *Top*, a high view that swings behind your kart and pulls
+  back with speed, or *Chase*, low behind the kart.
 
 ## Play
 
@@ -27,14 +49,14 @@ The spare cell (3 or 5 players) shows the whole circuit from above with the stan
 
 ### Phone controller (`pad.html`)
 - Left half: slide your thumb to steer (or switch on **TILT** and steer by tilting the phone).
-- **GAS** (hold), **BRAKE** (hold, reverses when stopped), the **core button** fires your power-up,
+- **GAS** (hold), **BRAKE** (hold, reverses when stopped; with steering at speed it drifts), the **core button** fires your power-up,
   **LOOK BACK** in the top bar.
 - The phone shows your place, lap and the power-up you are carrying, and buzzes when you are hit.
 
 ### Keyboard (for testing or a couch player)
 - Player 1: arrows, Space = fire, Shift = look back
 - Player 2: WASD, F = fire, R = look back
-- Enter = start, Esc / P = pause, M = music
+- Enter = start, Esc / P = pause, C = camera, M = music
 
 ## Online: friends at home
 
@@ -78,13 +100,19 @@ Same technology as SpaceGeo, extended to many phones (`js/padhost.js`, `pad.html
 
 - `index.html` – lobby, HUD and overlays (styles inline), import map for three.js
 - `js/main.js` – renderer, players (phones, keyboards, AI), lobby, split screen, HUD, phone status feed
-- `js/race.js` – driving, laps and places, energy cores, power-ups, AI drivers, effects
-- `js/track.js` – the spline track, canyon terrain, river, road and barriers, the bridge, the tunnel, the start gantry and scenery
-- `js/models.js` – materials, race karts, energy cores, rocks, mesas, cacti and pines (all built from primitives)
+- `js/look.js` – the shared stylised lighting, fog and sky, time-of-day presets, glow materials, the shadow-casting sun, foliage, particles and tyre marks
+- `js/race.js` – driving and drifting, laps and places, energy cores, power-ups, AI drivers, effects, cameras
+- `js/track.js` – the spline track, park terrain (height field and data texture), river and pond, road and kerbs, the bridge, the tunnel, the start gate and grandstand, fences, lamps, trees, bushes, rocks and grass
+- `js/models.js` – karts, energy cores, lamps and scenery pieces (all built from primitives)
 - `js/padhost.js` – the game side of the phone link (up to 5 phones)
 - `js/net.js` – online races: the host side (devices joining) and the joining device's link
 - `js/audio.js` – synth sound effects, engine and music (Web Audio, no files)
 - `pad.html` – the phone controller
 - `sw.js`, `manifest.webmanifest`, `pad.webmanifest` – installable app / offline cache
 
-Add `?webgl` to the address to force the WebGL 2 renderer, or `?q=low` for low graphics.
+Add `?webgl` to the address to force the WebGL 2 renderer, `?q=low` for low graphics (the default on phones and tablets),
+`?tod=night` (day, dusk, night, dawn, cycle) for the time of day and `?cam=chase` for the chase camera.
+
+## Credits
+
+Visual techniques adapted from [folio-2025](https://github.com/brunosimon/folio-2025) by Bruno Simon (MIT licence).

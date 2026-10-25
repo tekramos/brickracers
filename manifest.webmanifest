@@ -1,2 +1,2 @@
 { "name": "TekRacers", "short_name": "TekRacers", "start_url": "./", "display": "fullscreen", "orientation": "landscape",
-  "background_color": "#120c2c", "theme_color": "#120c2c", "icons": [ { "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" } ] }
+  "background_color": "#24122f", "theme_color": "#24122f", "icons": [ { "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" } ] }

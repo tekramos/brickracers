@@ -1,28 +1,35 @@
 /* ============================================================
    The track: a closed spline sampled into evenly spaced points. Karts, cores and the AI all
    work in track coordinates (sample index + sideways offset).
-   The world is a sunset canyon: a low-poly desert heightfield with a river canyon the road
-   crosses on a steel arch bridge, a mountain it drives through in a lit tunnel, mesas,
-   pylons, billboards and a neon start gantry.
+   The world is a little park in the hills, built like a diorama:
+   - a terrain mesh coloured per pixel from a data texture (paving, grass, water, road)
+   - thousands of grass blades around the camera that sway in the wind and part around your kart
+   - trees made of soft leaf puffs, bushes, rocks, lamps and wooden fences
+   - a river into a pond that the road crosses on a stone bridge, and a hill it drives through
+     in a tunnel (the hill turns see-through above your kart)
    ============================================================ */
 import * as THREE from 'three';
-import { mat, glow, part, rock, mesa, pine, cactus, shrub, pylon, COLORS } from './models.js';
+import { Fn, texture, positionWorld, normalWorld, vec2, vec3, float, mix, color, attribute, vertexIndex, varying, step, uniform,
+  cameraPosition, atan, rotateUV, mod, uv, fract, abs, floor, max } from 'three/tsl';
+import { L, stylize, emissive, haloMat, noiseTex, windAt, foliageGeometry, foliageMaterial } from './look.js';
+import { part, COLORS, trunkGeometry, rockGeometry, lamp, mergeAll } from './models.js';
 
-// control points: x, z, height
+// control points: x, z
 const LAYOUT = [
-  [0, 0, 0], [90, 0, 0], [165, -14, 0], [222, -62, 2], [244, -132, 7], [234, -205, 9], [222, -262, 9], [212, -322, 9],
-  [190, -380, 5], [135, -420, 0], [62, -410, 0], [18, -360, 0], [-40, -322, 0], [-110, -312, 0], [-180, -322, 0],
-  [-236, -282, 0], [-262, -204, 0], [-222, -150, 0], [-254, -96, 0], [-226, -36, 0], [-160, 2, 0], [-80, 14, 0],
+  [-140, 0], [-40, 0], [60, 0], [140, 0], [205, -22], [248, -80], [262, -140], [258, -200], [236, -258], [190, -292], [132, -282],
+  [98, -236], [56, -206], [8, -228], [-40, -282], [-95, -306], [-150, -306], [-200, -278], [-246, -226], [-258, -160], [-228, -108],
+  [-258, -56], [-240, -8], [-196, 10],
 ];
 export const HALF_W = 10;     // half the road width
 const SPACING = 1;            // distance between samples
-// the river canyon (a polyline) and the mountain with the tunnel
-const CANYON = [[40, -140], [140, -222], [262, -262], [380, -248], [520, -300], [760, -330]], CANYON_HALF = 36, CANYON_FLOOR = 15, CANYON_DEPTH = -32;
-const MOUNTAIN = { x:-112, z:-318, r:165, h:95 }, TUNNEL_R = 80;
-export const WORLD = { cx:0, cz:-200, size:1900 };
+// the river (a polyline flowing into a pond), the hill with the tunnel
+const RIVER = [[520, -60], [440, -96], [360, -128], [292, -150], [230, -152], [170, -138]], RIVER_HALF = 15, POND = { x:122, z:-132, r:40 };
+const HILL = { x:-122, z:-336, r:104, h:36 }, TUNNEL_R = 62;
+const WATER_Y = -1.4;
+export const WORLD = { x0:-440, z0:-560, size:960 };
+const RES = 640, TEX = WORLD.size / RES;   // data texels: 1.5 units each
 
 export function mulberry(seed){ return () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
-// smooth value noise in [-1, 1]
 const hash = (x, z) => { const s = Math.sin(x * 127.1 + z * 311.7) * 43758.5453; return (s - Math.floor(s)) * 2 - 1; };
 function noise(x, z){
   const xi = Math.floor(x), zi = Math.floor(z), xf = x - xi, zf = z - zi, u = xf * xf * (3 - 2 * xf), v = zf * zf * (3 - 2 * zf);
@@ -31,11 +38,14 @@ function noise(x, z){
 }
 const sstep = (a, b, x) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
 function segDist(px, pz, ax, az, bx, bz){ const dx = bx - ax, dz = bz - az, t = Math.max(0, Math.min(1, ((px - ax) * dx + (pz - az) * dz) / (dx * dx + dz * dz))); return Math.hypot(px - ax - dx * t, pz - az - dz * t); }
-const canyonDist = (x, z) => { let d = Infinity; for (let i = 0; i + 1 < CANYON.length; i++) d = Math.min(d, segDist(x, z, ...CANYON[i], ...CANYON[i + 1])); return d; };
+// distance to the water's edge line: negative inside the river or pond
+const riverDist = (x, z) => { let d = Infinity; for (let i = 0; i + 1 < RIVER.length; i++) d = Math.min(d, segDist(x, z, ...RIVER[i], ...RIVER[i + 1]) - RIVER_HALF); return Math.min(d, Math.hypot(x - POND.x, z - POND.z) - POND.r); };
+const hillDist = (x, z) => Math.hypot(x - HILL.x, z - HILL.z);
+const toUV = xz => xz.sub(vec2(WORLD.x0, WORLD.z0)).div(WORLD.size);
 
 export class Track {
   constructor(){
-    const curve = new THREE.CatmullRomCurve3(LAYOUT.map(p => new THREE.Vector3(p[0], p[2], p[1])), true, 'centripetal');
+    const curve = new THREE.CatmullRomCurve3(LAYOUT.map(p => new THREE.Vector3(p[0], 0, p[1])), true, 'centripetal');
     this.length = curve.getLength();
     const N = this.N = Math.round(this.length / SPACING);
     const pts = curve.getSpacedPoints(N);
@@ -46,17 +56,17 @@ export class Track {
       const r = new THREE.Vector3(-t.z, 0, t.x).normalize(); // sideways (right when facing along the track), level
       this.P.push(p); this.T.push(t); this.R.push(r);
     }
-    // smooth the heights so ramps feel gentle
-    const ys = this.P.map(p => p.y);
-    for (let pass = 0; pass < 6; pass++) for (let i = 0; i < N; i++) ys[i] = (ys[(i - 2 + N) % N] + ys[(i - 1 + N) % N] + ys[i] * 2 + ys[(i + 1) % N] + ys[(i + 2) % N]) / 6;
+    // the road climbs gently onto the bridge, then smooth the heights so ramps feel soft
+    const ys = this.P.map(p => .15 + 3.6 * sstep(RIVER_HALF + 34, RIVER_HALF - 6, riverDist(p.x, p.z) + RIVER_HALF));
+    for (let pass = 0; pass < 8; pass++) for (let i = 0; i < N; i++) ys[i] = (ys[(i - 2 + N) % N] + ys[(i - 1 + N) % N] + ys[i] * 2 + ys[(i + 1) % N] + ys[(i + 2) % N]) / 6;
     this.P.forEach((p, i) => p.y = ys[i]);
-    // where the road is a bridge (over the canyon) or in the tunnel
-    this.kind = this.P.map(p => Math.hypot(p.x - MOUNTAIN.x, p.z - MOUNTAIN.z) < TUNNEL_R ? 'tunnel' : canyonDist(p.x, p.z) < CANYON_HALF + 4 ? 'bridge' : 'ground');
+    this.kind = this.P.map(p => hillDist(p.x, p.z) < TUNNEL_R ? 'tunnel' : riverDist(p.x, p.z) < 7 ? 'bridge' : 'ground');
     // turn rate at each sample, for the AI (how sharp the road bends ahead)
     this.bend = this.T.map((t, i) => { const u = this.T[(i + 12) % N]; return Math.atan2(t.x * u.z - t.z * u.x, t.x * u.x + t.z * u.z); });
-    // a coarse grid of samples for fast "nearest road" lookups when building the terrain
+    // a coarse grid of samples for fast "nearest road" lookups
     this.cell = 40; this.buckets = new Map();
     this.P.forEach((p, i) => { const k = Math.floor(p.x / this.cell) + ',' + Math.floor(p.z / this.cell); if (!this.buckets.has(k)) this.buckets.set(k, []); this.buckets.get(k).push(i); });
+    this.buildFields();
   }
   wrap(i){ const N = this.N; return ((i % N) + N) % N; }
   // nearest sample to (x, z), searching around a hint index (karts move only a few samples a frame)
@@ -93,316 +103,398 @@ export class Track {
   }
   heading(i){ const t = this.T[this.wrap(Math.round(i))]; return Math.atan2(t.x, t.z); }
 
-  /* ---------- terrain height ---------- */
-  // raw ground: rolling dunes (calm near the road), the mountain, the canyon and the far ridges
-  rawHeight(x, z, dTrack){
-    const calm = sstep(16, 90, dTrack);
-    let h = (noise(x * .007, z * .007) * 12 + noise(x * .025, z * .025) * 3) * calm;
-    const dm = Math.hypot(x - MOUNTAIN.x, z - MOUNTAIN.z);
-    if (dm < MOUNTAIN.r) h += MOUNTAIN.h * (.5 + .5 * Math.cos(Math.PI * dm / MOUNTAIN.r)) * (.85 + .25 * noise(x * .03, z * .03));
-    const de = Math.hypot(x - WORLD.cx, z - WORLD.cz);
-    h += sstep(560, 900, de) * (70 + 50 * noise(x * .004, z * .004));
-    const dc = canyonDist(x, z);
-    if (dc < CANYON_HALF) h += (CANYON_DEPTH - h) * sstep(CANYON_HALF, CANYON_FLOOR, dc) + noise(x * .08, z * .08) * 1.5 * sstep(CANYON_HALF, CANYON_FLOOR, dc);
-    return h;
+  /* ---------- fields: distance to the road, ground height and the data texture ---------- */
+  buildFields(){
+    const D = this.D = new Float32Array(RES * RES).fill(1e9), I = this.I = new Int32Array(RES * RES).fill(-1);
+    // stamp the distance to the road around every sample
+    const rad = 46, rt = Math.ceil(rad / TEX);
+    this.P.forEach((p, i) => {
+      const ci = Math.floor((p.x - WORLD.x0) / TEX), cj = Math.floor((p.z - WORLD.z0) / TEX);
+      for (let j = Math.max(0, cj - rt); j <= Math.min(RES - 1, cj + rt); j++) for (let k = Math.max(0, ci - rt); k <= Math.min(RES - 1, ci + rt); k++){
+        const x = WORLD.x0 + (k + .5) * TEX, z = WORLD.z0 + (j + .5) * TEX, d = Math.hypot(x - p.x, z - p.z), n = j * RES + k;
+        if (d < D[n]){ D[n] = d; I[n] = i; }
+      }
+    });
+    const H = this.H = new Float32Array(RES * RES), data = new Uint8Array(RES * RES * 4);
+    for (let j = 0; j < RES; j++) for (let k = 0; k < RES; k++){
+      const n = j * RES + k, x = WORLD.x0 + (k + .5) * TEX, z = WORLD.z0 + (j + .5) * TEX, d = D[n], i = I[n];
+      const kind = i >= 0 ? this.kind[i] : 'ground', ry = i >= 0 ? this.P[i].y : 0;
+      // rolling ground, calm near the road, hills around the edge of the world
+      const calm = sstep(14, 70, d);
+      let h = (noise(x * .018, z * .018) * 1.6 + noise(x * .06, z * .06) * .4) * calm;
+      const de = Math.hypot((x - 40) / 1.05, (z + 120) / .95);
+      h += sstep(330, 450, de) * (18 + 14 * noise(x * .01, z * .01));
+      const dh = hillDist(x, z);
+      if (dh < HILL.r) h += HILL.h * (.5 + .5 * Math.cos(Math.PI * dh / HILL.r)) * (.9 + .2 * noise(x * .04, z * .04));
+      // the river and pond
+      const rd = riverDist(x, z);
+      if (rd < 0) h += (-5.5 - h) * sstep(0, -9, rd);
+      else h += .4 * sstep(0, 3, rd) * sstep(10, 3, rd); // a soft bank
+      // the ground meets the road; the hill stays well above the tunnel
+      if (kind === 'ground' && d < HALF_W + 24){ const w = sstep(HALF_W + 24, HALF_W + 4, d); h += (ry - .06 - h) * w; }
+      if (kind === 'tunnel' && d < HALF_W + 10) h = Math.max(h, ry + 11.5);
+      H[n] = h;
+      // data: r paving, g grass, b water depth, a road
+      const plaza = sstep(5, 0, Math.max(Math.abs(x + 140) - 48, Math.abs(z) - 30)) * (d > HALF_W + 1.5 ? 1 : 0);
+      const n1 = noise(x * .05, z * .05), n2 = noise(x * .13 + 9, z * .13);
+      let grass = sstep(-.55, -.15, n1 + n2 * .35) * sstep(HALF_W + 1.5, HALF_W + 5, d) * (1 - plaza) * sstep(WATER_Y + .1, WATER_Y + .9, h);
+      if (dh < HILL.r * .45) grass *= .6;
+      const wet = sstep(WATER_Y + .4, WATER_Y - 4, h);
+      data[n * 4] = plaza * 255; data[n * 4 + 1] = grass * 255; data[n * 4 + 2] = wet * 255; data[n * 4 + 3] = d < HALF_W + .5 ? 255 : 0;
+    }
+    this.dataTex = new THREE.DataTexture(data, RES, RES, THREE.RGBAFormat);
+    this.dataTex.magFilter = this.dataTex.minFilter = THREE.LinearFilter; this.dataTex.needsUpdate = true;
+    const hh = new Uint16Array(RES * RES); for (let n = 0; n < hh.length; n++) hh[n] = THREE.DataUtils.toHalfFloat(H[n]);
+    this.heightTex = new THREE.DataTexture(hh, RES, RES, THREE.RedFormat, THREE.HalfFloatType);
+    this.heightTex.magFilter = this.heightTex.minFilter = THREE.LinearFilter; this.heightTex.needsUpdate = true;
   }
-  height(x, z){
-    const n = this.near(x, z, 2), d = n.d;
-    let h = this.rawHeight(x, z, d);
-    // the ground meets the road level next to it (not under the bridge or over the tunnel)
-    if (n.i >= 0 && this.kind[n.i] === 'ground'){ const w = sstep(HALF_W + 24, HALF_W + 4, d); h += (this.P[n.i].y - .3 - h) * w; }
-    // inside the tunnel slot the ground drops to the road, so cells at the portals don't rise across the road
-    else if (n.i >= 0 && this.kind[n.i] === 'tunnel' && d < HALF_W + 6) h = this.P[n.i].y - .3;
-    return h;
+  field(arr, x, z){
+    const fx = (x - WORLD.x0) / TEX - .5, fz = (z - WORLD.z0) / TEX - .5, k = Math.max(0, Math.min(RES - 2, Math.floor(fx))), j = Math.max(0, Math.min(RES - 2, Math.floor(fz)));
+    const u = Math.max(0, Math.min(1, fx - k)), v = Math.max(0, Math.min(1, fz - j)), n = j * RES + k;
+    return arr[n] * (1 - u) * (1 - v) + arr[n + 1] * u * (1 - v) + arr[n + RES] * (1 - u) * v + arr[n + RES + 1] * u * v;
   }
+  height(x, z){ return this.field(this.H, x, z); }
+  roadDist(x, z){ const fx = Math.floor((x - WORLD.x0) / TEX), fz = Math.floor((z - WORLD.z0) / TEX); if (fx < 0 || fz < 0 || fx >= RES || fz >= RES) return 1e9; return this.D[fz * RES + fx]; }
   inSlot(x, z){ const n = this.near(x, z, 1); return n.i >= 0 && n.d < HALF_W + 9 && this.kind[n.i] === 'tunnel'; }
 
   /* ---------- the scene ---------- */
   build(scene, quality){
-    const rng = mulberry(11);
-    const root = new THREE.Group(); scene.add(root); this.root = root;
-    this.buildSky(root, rng);
-    this.buildTerrain(root, quality);
-    this.buildRiver(root);
+    const root = this.root = new THREE.Group(); scene.add(root);
+    this.quality = quality;
+    const rng = mulberry(20251025);
+    this.buildGround(root, quality);
+    this.buildWater(root);
     this.buildRoad(root);
-    this.buildRails(root);
     this.buildBridge(root);
     this.buildTunnel(root);
-    this.buildStart(root);
-    this.buildScenery(root, rng, quality);
+    this.buildStart(root, rng);
+    this.buildFences(root);
+    this.buildLamps(root);
+    this.buildNature(root, rng, quality);
+    this.buildGrass(root, quality);
   }
 
-  buildSky(root, rng){
-    const skyG = new THREE.SphereGeometry(1500, 32, 20), cols = [];
-    const top = new THREE.Color('#161040'), mid = new THREE.Color('#6b2c78'), hor = new THREE.Color('#ff9a5c'), low = new THREE.Color('#ffc58a');
-    const pa = skyG.attributes.position;
-    for (let i = 0; i < pa.count; i++){
-      const h = pa.getY(i) / 1500, c = h < 0 ? low.clone() : h < .12 ? low.clone().lerp(hor, h / .12) : h < .4 ? hor.clone().lerp(mid, (h - .12) / .28) : mid.clone().lerp(top, (h - .4) / .6);
-      cols.push(c.r, c.g, c.b);
-    }
-    skyG.setAttribute('color', new THREE.Float32BufferAttribute(cols, 3));
-    root.add(new THREE.Mesh(skyG, new THREE.MeshBasicMaterial({ vertexColors:true, side:THREE.BackSide, fog:false, depthWrite:false })));
-    // the setting sun with a soft halo, in the direction of the sunlight
-    this.sunDir = new THREE.Vector3(-.75, .16, -.64).normalize();
-    const sun = new THREE.Mesh(new THREE.CircleGeometry(70, 40), new THREE.MeshBasicMaterial({ color:'#ffe2a0', fog:false }));
-    sun.position.copy(this.sunDir).multiplyScalar(1350); sun.lookAt(0, 0, 0); root.add(sun);
-    const haloTex = (() => { const c = document.createElement('canvas'); c.width = c.height = 128; const g = c.getContext('2d'); const r = g.createRadialGradient(64, 64, 10, 64, 64, 64);
-      r.addColorStop(0, 'rgba(255,220,150,.9)'); r.addColorStop(.35, 'rgba(255,150,90,.35)'); r.addColorStop(1, 'rgba(255,120,80,0)'); g.fillStyle = r; g.fillRect(0, 0, 128, 128); return new THREE.CanvasTexture(c); })();
-    const halo = new THREE.Mesh(new THREE.PlaneGeometry(600, 600), new THREE.MeshBasicMaterial({ map:haloTex, transparent:true, depthWrite:false, fog:false, blending:THREE.AdditiveBlending }));
-    halo.position.copy(this.sunDir).multiplyScalar(1340); halo.lookAt(0, 0, 0); root.add(halo);
-    // thin streaky clouds catching the light
-    for (let i = 0; i < 14; i++){
-      const c = new THREE.Mesh(new THREE.PlaneGeometry(260 + rng() * 300, 14 + rng() * 16), new THREE.MeshBasicMaterial({ color:rng() < .5 ? '#ffb38a' : '#d97aa6', transparent:true, opacity:.55, fog:false, depthWrite:false, side:THREE.DoubleSide }));
-      const a = rng() * Math.PI * 2, d = 1100; c.position.set(Math.cos(a) * d, 220 + rng() * 260, Math.sin(a) * d); c.lookAt(0, c.position.y * .6, 0); root.add(c);
-    }
+  // terrain colour per pixel: dirt, grass, paving slabs, rock on steep slopes, darker where wet
+  groundColor(data){
+    const p = positionWorld.xz, n = texture(noiseTex, p.mul(.011)).r, n2 = texture(noiseTex, p.mul(.05)).r;
+    const dirt = mix(color('#a8687a'), color('#8a5670'), n2);
+    const grass = mix(color('#b8b62e'), color('#d4c13a'), n.smoothstep(.3, .75));
+    let c = mix(dirt, grass, data.g);
+    // paving: big square slabs, each a slightly different tone, with dark joints
+    const q = p.div(4), cell = texture(noiseTex, floor(q).mul(.137)).r, f = fract(q), joint = step(.95, max(f.x, f.y));
+    const slab = mix(mix(color('#ffcf8b'), color('#f0b27e'), cell), color('#c98a6c'), joint);
+    c = mix(c, slab, data.r);
+    c = mix(c, color('#7c5a66'), data.b);
+    return c;
+  }
+  buildGround(root, quality){
+    const segs = quality === 'low' ? 240 : 320, S = WORLD.size;
+    const g = new THREE.PlaneGeometry(S, S, segs, segs).rotateX(-Math.PI / 2).translate(WORLD.x0 + S / 2, 0, WORLD.z0 + S / 2);
+    const p = g.attributes.position;
+    for (let i = 0; i < p.count; i++) p.setY(i, this.height(p.getX(i), p.getZ(i)));
+    g.computeVertexNormals();
+    const data = texture(this.dataTex, toUV(positionWorld.xz));
+    // rock shows on the steep faces of the hills
+    const steep = normalWorld.y.smoothstep(.86, .6);
+    const col = mix(this.groundColor(data), mix(color('#c98f8a'), color('#a77089'), texture(noiseTex, positionWorld.xz.mul(.03)).r), steep);
+    const m = stylize(col, { shadow:data.g.mul(.3), bounce:false, cut:true });
+    const mesh = new THREE.Mesh(g, m); mesh.receiveShadow = true; root.add(mesh);
+    this.ground = mesh;
+  }
+  buildWater(root){
+    const S = WORLD.size;
+    const g = new THREE.PlaneGeometry(S, S).rotateX(-Math.PI / 2).translate(WORLD.x0 + S / 2, WATER_Y, WORLD.z0 + S / 2);
+    const depth = float(WATER_Y).sub(texture(this.heightTex, toUV(positionWorld.xz)).r);
+    const ripple = texture(noiseTex, positionWorld.xz.mul(.04).add(vec2(L.time.mul(.02), L.time.mul(.013)))).r;
+    const foam = step(depth.add(ripple.sub(.5).mul(.5)), .45);
+    const col = mix(mix(color('#7fe3cf'), color('#1f4a8a'), depth.div(4.5).clamp(0, 1)), color('#f4ecff'), foam);
+    const m = stylize(col, { normal:vec3(0, 1, 0), core:false, bounce:false });
+    const mesh = new THREE.Mesh(g, m); mesh.receiveShadow = true; root.add(mesh);
   }
 
-  buildTerrain(root, quality){
-    const S = WORLD.size, n = quality === 'low' ? 200 : 300, step = S / n, x0 = WORLD.cx - S / 2, z0 = WORLD.cz - S / 2;
-    const pos = new Float32Array((n + 1) * (n + 1) * 3), col = new Float32Array((n + 1) * (n + 1) * 3), H = new Float32Array((n + 1) * (n + 1));
-    const sand = new THREE.Color('#e3a064'), sand2 = new THREE.Color('#d58a52'), rockA = new THREE.Color(COLORS.rock), rockB = new THREE.Color(COLORS.rock2), rockC = new THREE.Color(COLORS.rock3), grass = new THREE.Color('#7d8f4a'), c = new THREE.Color();
-    for (let j = 0; j <= n; j++) for (let i = 0; i <= n; i++){
-      const x = x0 + i * step, z = z0 + j * step, h = this.height(x, z), k = j * (n + 1) + i;
-      H[k] = h; pos[k * 3] = x; pos[k * 3 + 1] = h; pos[k * 3 + 2] = z;
-      // colour by height: banded rock in the canyon and on the mountain, sand elsewhere, a green river floor
-      if (h < CANYON_DEPTH + 3) c.copy(grass);
-      else if (h < -3) c.copy([rockA, rockB, rockC][Math.floor(-h / 5) % 3]);
-      else if (h > 18) c.copy([rockA, rockB, rockC][Math.floor(h / 9) % 3]).lerp(new THREE.Color('#f0d0b0'), sstep(70, 100, h) * .6);
-      else c.copy(sand).lerp(sand2, (noise(x * .05, z * .05) + 1) / 2);
-      col[k * 3] = c.r; col[k * 3 + 1] = c.g; col[k * 3 + 2] = c.b;
+  // a ribbon along the track between two sideways offsets
+  // (faces up, or down when `up` is false)
+  ribbon(a, b, y = .04, from = 0, to = this.N, uvScale = 1, up = true){
+    const pos = [], uvs = [], ind = [];
+    let v = 0;
+    for (let k = from; k <= to; k++){
+      const i = this.wrap(k), p = this.P[i], r = this.R[i];
+      pos.push(p.x + r.x * a, p.y + y, p.z + r.z * a, p.x + r.x * b, p.y + y, p.z + r.z * b);
+      uvs.push(0, v * uvScale, 1, v * uvScale); v += SPACING;
+      if (k < to){ const n = (k - from) * 2; ind.push(n, n + 2, n + 1, n + 1, n + 2, n + 3); }
     }
-    const idx = [];
-    for (let j = 0; j < n; j++) for (let i = 0; i < n; i++){
-      const a = j * (n + 1) + i, b = a + 1, d = a + n + 1, e = d + 1;
-      // leave a slot where the road runs through the mountain: the tunnel fills it
-      if (this.inSlot(x0 + (i + .5) * step, z0 + (j + .5) * step)) continue;
-      idx.push(a, d, b, b, d, e);
-    }
-    const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.BufferAttribute(pos, 3)); g.setAttribute('color', new THREE.BufferAttribute(col, 3)); g.setIndex(idx); g.computeVertexNormals();
-    root.add(new THREE.Mesh(g, new THREE.MeshStandardMaterial({ vertexColors:true, flatShading:true, roughness:.95, metalness:0 })));
+    // which way the first triangle faces decides the winding
+    const P = i => new THREE.Vector3(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]);
+    const ny = P(2).sub(P(0)).cross(P(1).sub(P(0))).y;
+    if ((ny > 0) !== up) for (let i = 0; i < ind.length; i += 3){ const t = ind[i + 1]; ind[i + 1] = ind[i + 2]; ind[i + 2] = t; }
+    const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2)); g.setIndex(ind);
+    g.computeVertexNormals(); return g;
   }
-
-  buildRiver(root){
-    // a ribbon of water along the canyon floor
-    const pts = CANYON.map(([x, z]) => new THREE.Vector3(x, CANYON_DEPTH + 2.2, z)), curve = new THREE.CatmullRomCurve3(pts);
-    const M = 200, pos = [], idx = [];
-    for (let i = 0; i <= M; i++){
-      const p = curve.getPointAt(i / M), t = curve.getTangentAt(i / M), r = new THREE.Vector3(-t.z, 0, t.x).normalize(), w = CANYON_FLOOR + 3;
-      pos.push(p.x + r.x * w, p.y, p.z + r.z * w, p.x - r.x * w, p.y, p.z - r.z * w);
-      if (i < M){ const a = i * 2; idx.push(a, a + 2, a + 1, a + 1, a + 2, a + 3); }
-    }
-    const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setIndex(idx); g.computeVertexNormals();
-    root.add(new THREE.Mesh(g, new THREE.MeshStandardMaterial({ color:'#2a9fc4', roughness:.15, metalness:.2, side:THREE.DoubleSide, emissive:new THREE.Color('#0b3a55'), emissiveIntensity:.6 })));
-  }
-
   buildRoad(root){
-    const N = this.N, pos = [], uv = [], idx = [], cpos = [], ccol = [], cidx = [];
-    let dist = 0;
-    const red = new THREE.Color('#ff2e4a'), wht = new THREE.Color('#ffffff');
-    for (let i = 0; i <= N; i++){
-      const k = i % N, p = this.P[k], r = this.R[k];
-      if (i) dist += SPACING;
-      for (const s of [-1, 1]){ pos.push(p.x + r.x * HALF_W * s, p.y + .06, p.z + r.z * HALF_W * s); uv.push(s < 0 ? 0 : 1, dist / 24); }
-      // kerbs just inside the rails
-      const c = Math.floor(dist / 3) % 2 ? red : wht;
-      for (const s of [-1, 1]) for (const w of [HALF_W - 1, HALF_W]){ cpos.push(p.x + r.x * w * s, p.y + .1, p.z + r.z * w * s); ccol.push(c.r, c.g, c.b); }
-      if (i < N){ const a = i * 2; idx.push(a, a + 2, a + 1, a + 1, a + 2, a + 3);
-        const b = i * 4; cidx.push(b, b + 4, b + 1, b + 1, b + 4, b + 5, b + 2, b + 3, b + 6, b + 3, b + 7, b + 6); }
+    // asphalt with a little grain, white edge lines and a dashed centre line
+    const u = uv().x, v = uv().y, grain = texture(noiseTex, positionWorld.xz.mul(.09)).r;
+    let c = mix(color('#463f35'), color('#54493d'), grain);
+    const edge = step(.965, abs(u.sub(.5)).mul(2)), dash = step(abs(u.sub(.5)), .008).mul(step(fract(v.div(9)), .5));
+    c = mix(c, color('#efe2cf'), max(edge.mul(step(abs(u.sub(.5)).mul(2), .985)), dash));
+    const road = new THREE.Mesh(this.ribbon(-HALF_W, HALF_W), stylize(c, { normal:vec3(0, 1, 0), core:false, bounce:false }));
+    road.receiveShadow = true; root.add(road);
+    // kerbs: red and white blocks on both edges, flat on the ground
+    for (const s of [-1, 1]){
+      const g = this.ribbon(s * HALF_W, s * (HALF_W + 1.4), .06);
+      const stripe = step(fract(uv().y.div(6)), .5);
+      const k = new THREE.Mesh(g, stylize(mix(color('#ff4e5b'), color('#fff1e4'), stripe), { normal:vec3(0, 1, 0), core:false, bounce:false, side:THREE.DoubleSide }));
+      k.receiveShadow = true; root.add(k);
     }
-    const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); g.setIndex(idx); g.computeVertexNormals();
-    root.add(new THREE.Mesh(g, new THREE.MeshStandardMaterial({ map:this.roadTexture(), roughness:.85, metalness:0, side:THREE.DoubleSide })));
-    const kg = new THREE.BufferGeometry();
-    kg.setAttribute('position', new THREE.Float32BufferAttribute(cpos, 3)); kg.setAttribute('color', new THREE.Float32BufferAttribute(ccol, 3)); kg.setIndex(cidx); kg.computeVertexNormals();
-    root.add(new THREE.Mesh(kg, new THREE.MeshStandardMaterial({ vertexColors:true, roughness:.7, side:THREE.DoubleSide })));
   }
-
-  // guard rails: posts, a steel beam and a neon strip (one instanced mesh each); none in the tunnel
-  buildRails(root){
-    const N = this.N, L = 4, step = Math.round(L / SPACING), count = Math.ceil(N / step) * 2;
-    const beams = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), mat(COLORS.steel, { roughness:.35, metalness:.7 }), count);
-    const neon = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), glow('#ffffff'), count);
-    const posts = new THREE.InstancedMesh(new THREE.BoxGeometry(.25, 1, .25), mat(COLORS.dark, { metalness:.5 }), count);
-    const cyan = new THREE.Color(COLORS.cyan), mag = new THREE.Color(COLORS.magenta);
-    const m = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler(), s = new THREE.Vector3(), p = new THREE.Vector3();
-    let n = 0;
-    for (let i = 0; i + step <= N; i += step){
-      if (this.kind[i] === 'tunnel' || this.kind[(i + step) % N] === 'tunnel') continue;
-      const a = this.P[i], b = this.P[(i + step) % N];
-      for (const side of [-1, 1]){
-        const ra = this.R[i], rb = this.R[(i + step) % N], o = HALF_W + .6;
-        const ax = a.x + ra.x * o * side, az = a.z + ra.z * o * side, bx = b.x + rb.x * o * side, bz = b.z + rb.z * o * side, ay = a.y, by = b.y;
-        const len = Math.hypot(bx - ax, bz - az) + .1, y = (ay + by) / 2;
-        e.set(-Math.atan2(by - ay, len), Math.atan2(bx - ax, bz - az), 0, 'YXZ'); q.setFromEuler(e);
-        p.set((ax + bx) / 2, y + .75, (az + bz) / 2); s.set(.18, .45, len); m.compose(p, q, s); beams.setMatrixAt(n, m);
-        p.set((ax + bx) / 2, y + 1.02, (az + bz) / 2); s.set(.12, .08, len); m.compose(p, q, s); neon.setMatrixAt(n, m); neon.setColorAt(n, side > 0 ? cyan : mag);
-        p.set(ax, ay + .5, az); s.set(1, 1, 1); e.set(0, 0, 0); m.compose(p, new THREE.Quaternion(), s); posts.setMatrixAt(n, m);
-        n++;
+  sections(kind){
+    const out = []; let s = -1;
+    for (let i = 0; i < this.N; i++){ const on = this.kind[i] === kind; if (on && s < 0) s = i; if (!on && s >= 0){ out.push([s, i - 1]); s = -1; } }
+    if (s >= 0) out.push([s, this.N - 1]);
+    return out;
+  }
+  buildBridge(root){
+    const stone = stylize('#d7c3d6'), dark = stylize('#a58aa6');
+    for (const [a, b] of this.sections('bridge')){
+      const i0 = a - 10, i1 = b + 10;
+      // deck: a thick slab under the road
+      const deck = this.ribbon(-HALF_W - 2.2, HALF_W + 2.2, -.05, i0, i1);
+      const under = this.ribbon(HALF_W + 2.2, -HALF_W - 2.2, -1.6, i0, i1, 1, false);
+      root.add(Object.assign(new THREE.Mesh(deck, stone), { receiveShadow:true }), Object.assign(new THREE.Mesh(under, dark), { castShadow:true }));
+      for (const s of [-1, 1]){
+        // deck side and a low parapet wall with caps
+        const side = this.wall(s * (HALF_W + 2.2), -1.6, -.05, i0, i1, s); root.add(Object.assign(new THREE.Mesh(side, dark), { receiveShadow:true }));
+        const wall = this.wall(s * (HALF_W + 1.6), 0, 1.1, i0, i1, -s), wall2 = this.wall(s * (HALF_W + 2.2), 0, 1.1, i0, i1, s);
+        for (const w of [wall, wall2]) root.add(Object.assign(new THREE.Mesh(w, stone), { castShadow:true, receiveShadow:true }));
+        root.add(Object.assign(new THREE.Mesh(this.ribbon(s * (HALF_W + 1.4), s * (HALF_W + 2.4), 1.15, i0, i1), stylize('#f0e2ee', { side:THREE.DoubleSide })), { castShadow:true, receiveShadow:true }));
+      }
+      // piers down into the water
+      for (let k = i0 + 6; k <= i1 - 6; k += 14){
+        const i = this.wrap(k), p = this.P[i];
+        for (const s of [-1, 1]){
+          const x = p.x + this.R[i].x * s * (HALF_W - 2), z = p.z + this.R[i].z * s * (HALF_W - 2);
+          root.add(part(new THREE.CylinderGeometry(1.2, 1.5, p.y + 7, 8), dark, x, (p.y - 7) / 2 - .8, z));
+        }
       }
     }
-    beams.count = neon.count = posts.count = n; root.add(beams, neon, posts);
   }
-
-  // a steel tied-arch bridge over the canyon, on concrete piers
-  buildBridge(root){
-    const N = this.N, idx = []; for (let i = 0; i < N; i++) if (this.kind[i] === 'bridge') idx.push(i);
-    if (!idx.length) return;
-    const i0 = idx[0], i1 = idx[idx.length - 1], span = i1 - i0;
-    // deck sides and underside, the whole length of the raised road
-    const ug = [], ui = [];
-    for (let k = 0; k <= span; k++){ const p = this.P[i0 + k], r = this.R[i0 + k];
-      for (const s of [-1, 1]) ug.push(p.x + r.x * (HALF_W + .9) * s, p.y + .05, p.z + r.z * (HALF_W + .9) * s, p.x + r.x * (HALF_W + .9) * s, p.y - 2.4, p.z + r.z * (HALF_W + .9) * s);
-      if (k < span){ const a = k * 4; ui.push(a, a + 1, a + 4, a + 1, a + 5, a + 4, a + 2, a + 6, a + 3, a + 3, a + 6, a + 7, a + 1, a + 3, a + 5, a + 3, a + 7, a + 5); } }
-    const sg = new THREE.BufferGeometry(); sg.setAttribute('position', new THREE.Float32BufferAttribute(ug, 3)); sg.setIndex(ui); sg.computeVertexNormals();
-    root.add(new THREE.Mesh(sg, mat('#5b6070', { side:THREE.DoubleSide, roughness:.6, metalness:.3 })));
-    // the two arches with hangers
-    const steel = mat('#d8462f', { roughness:.4, metalness:.5 }), rise = 24;
-    for (const s of [-1, 1]){
-      const pts = [];
-      for (let k = 0; k <= 24; k++){ const i = i0 + Math.round(span * k / 24), p = this.P[i], r = this.R[i]; pts.push(new THREE.Vector3(p.x + r.x * (HALF_W + 1.4) * s, p.y + .5 + Math.sin(Math.PI * k / 24) * rise, p.z + r.z * (HALF_W + 1.4) * s)); }
-      root.add(new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 60, .9, 6), steel));
-      for (let k = 2; k < 24; k += 2){ const i = i0 + Math.round(span * k / 24), p = this.P[i], r = this.R[i], h = Math.sin(Math.PI * k / 24) * rise;
-        const c = part(new THREE.CylinderGeometry(.12, .12, h, 5), mat('#e9e9ee', { metalness:.6, roughness:.3 }), p.x + r.x * (HALF_W + 1.4) * s, p.y + .5 + h / 2, p.z + r.z * (HALF_W + 1.4) * s); root.add(c); }
-      // neon line along the arch
-      root.add(new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts.map(v => v.clone().add(new THREE.Vector3(0, .95, 0)))), 60, .12, 4), glow('#ffb347')));
-    }
-    // piers down to the canyon floor
-    for (const f of [0, .25, .5, .75, 1]){ const i = i0 + Math.round(span * f), p = this.P[i], base = this.height(p.x, p.z);
-      if (p.y - base < 3) continue;
-      const h = p.y - 2.4 - base + 2; root.add(part(new THREE.CylinderGeometry(2.4, 3.2, h, 8), mat('#9aa0ad', { roughness:.8 }), p.x, base - 2 + h / 2, p.z)); }
-  }
-
-  // the tunnel: an arched tube through the mountain with ceiling lights and neon wall strips
-  buildTunnel(root){
-    const N = this.N, idx = []; for (let i = 0; i < N; i++) if (this.kind[i] === 'tunnel') idx.push(i);
-    if (!idx.length) return;
-    const i0 = idx[0] - 2, i1 = idx[idx.length - 1] + 2, span = i1 - i0, R = HALF_W + 3, M = 18;
+  // a vertical strip along the track at sideways offset `s`, from height y0 to y1, facing `face` (+1 right, -1 left)
+  wall(s, y0, y1, from, to, face){
     const pos = [], ind = [];
-    for (let k = 0; k <= span; k++){
-      const i = this.wrap(i0 + k), p = this.P[i], r = this.R[i];
-      // cross-section: straight walls up to 3, then a half-circle roof
-      const ring = [[-R, -.5], [-R, 3]];
-      for (let a = 1; a < M; a++){ const t = Math.PI - Math.PI * a / M; ring.push([Math.cos(t) * R, 3 + Math.sin(t) * R * .8]); }
-      ring.push([R, 3], [R, -.5]);
-      for (const [sx, sy] of ring) pos.push(p.x + r.x * sx, p.y + sy, p.z + r.z * sx);
-      if (k < span){ const L = ring.length, a = k * L; for (let j = 0; j < L - 1; j++) ind.push(a + j, a + L + j, a + j + 1, a + j + 1, a + L + j, a + L + j + 1); }
+    for (let k = from; k <= to; k++){
+      const i = this.wrap(k), p = this.P[i], r = this.R[i];
+      pos.push(p.x + r.x * s, p.y + y0, p.z + r.z * s, p.x + r.x * s, p.y + y1, p.z + r.z * s);
+      if (k < to){ const n = (k - from) * 2; if (face > 0) ind.push(n, n + 2, n + 1, n + 1, n + 2, n + 3); else ind.push(n, n + 1, n + 2, n + 1, n + 3, n + 2); }
     }
-    const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setIndex(ind); g.computeVertexNormals();
-    root.add(new THREE.Mesh(g, mat('#3b3f4c', { side:THREE.DoubleSide, roughness:.9 })));
-    // lights: warm panels on the ceiling, cyan and magenta strips on the walls
-    const lamps = new THREE.InstancedMesh(new THREE.BoxGeometry(3, .2, 1.2), glow('#ffe1a8'), Math.ceil(span / 8) + 1);
-    const m = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3(1, 1, 1), v = new THREE.Vector3(); let n = 0;
-    for (let k = 0; k <= span; k += 8){ const i = this.wrap(i0 + k), p = this.P[i]; q.setFromEuler(new THREE.Euler(0, this.heading(i), 0)); v.set(p.x, p.y + 3 + R * .8 - .3, p.z); m.compose(v, q, s); lamps.setMatrixAt(n++, m); }
-    lamps.count = n; root.add(lamps);
-    for (const side of [-1, 1]){
-      const sp = [], si = [];
-      for (let k = 0; k <= span; k++){ const i = this.wrap(i0 + k), p = this.P[i], r = this.R[i], x = (R - .05) * side;
-        sp.push(p.x + r.x * x, p.y + 1.6, p.z + r.z * x, p.x + r.x * x, p.y + 1.9, p.z + r.z * x);
-        if (k < span){ const a = k * 2; si.push(a, a + 2, a + 1, a + 1, a + 2, a + 3); } }
-      const sgeo = new THREE.BufferGeometry(); sgeo.setAttribute('position', new THREE.Float32BufferAttribute(sp, 3)); sgeo.setIndex(si);
-      root.add(new THREE.Mesh(sgeo, glow(side > 0 ? COLORS.cyan : COLORS.magenta, { side:THREE.DoubleSide })));
-    }
-    // portals: a rock face around a concrete arch at each end
-    for (const [k, dir] of [[0, -1], [span, 1]]){
-      const i = this.wrap(i0 + k), p = this.P[i], h = this.heading(i);
-      // shapes go around the opening (a hole touching the edge breaks the triangulation)
-      const opening = (sh, r) => { sh.lineTo(-r, -2); sh.lineTo(-r, 3); sh.absarc(0, 3, r, Math.PI, 0, true); sh.lineTo(r, -2); };
-      const W = R + 12, face = new THREE.Shape(); face.moveTo(-W, -2); opening(face, R);
-      for (const [fx, fy] of [[W, -2], [W * .9, 9], [W * .6, 19], [W * .25, 24], [-W * .2, 23], [-W * .55, 18], [-W * .85, 10]]) face.lineTo(fx, fy);
-      face.closePath();
-      const fm = new THREE.Mesh(new THREE.ExtrudeGeometry(face, { depth:4, bevelEnabled:false }), mat(COLORS.rock)); fm.position.set(p.x, p.y, p.z); fm.rotation.y = h; fm.translateZ(-2); root.add(fm);
-      const arch = new THREE.Shape(); arch.moveTo(-R - 1.5, -2); opening(arch, R); arch.lineTo(R + 1.5, -2); arch.lineTo(R + 1.5, 3); arch.absarc(0, 3, R + 1.5, 0, Math.PI, false); arch.closePath();
-      const am = new THREE.Mesh(new THREE.ExtrudeGeometry(arch, { depth:5, bevelEnabled:false }), mat('#a8adb8', { roughness:.7 })); am.position.set(p.x, p.y, p.z); am.rotation.y = h; am.translateZ(-2.5); root.add(am);
-      // a neon outline on the arch
-      const curve = new THREE.CurvePath(); const pts = []; for (let a = 0; a <= 24; a++){ const t = Math.PI - Math.PI * a / 24; pts.push(new THREE.Vector3(Math.cos(t) * (R + .8), 3 + Math.sin(t) * (R + .8), 0)); }
-      const neon = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 40, .18, 5), glow(COLORS.cyan)); neon.position.set(p.x, p.y, p.z); neon.rotation.y = h; neon.translateZ(dir > 0 ? 2.6 : -2.6); root.add(neon);
+    const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setIndex(ind); g.computeVertexNormals(); return g;
+  }
+  buildTunnel(root){
+    for (const [a, b] of this.sections('tunnel')){
+      const i0 = a - 3, i1 = b + 3, span = i1 - i0, R = HALF_W + 2.5, M = 16;
+      const pos = [], ind = [];
+      for (let k = 0; k <= span; k++){
+        const i = this.wrap(i0 + k), p = this.P[i], r = this.R[i];
+        const ring = [[-R, -.5], [-R, 3.5]];
+        for (let s = 1; s < M; s++){ const t = Math.PI - Math.PI * s / M; ring.push([Math.cos(t) * R, 3.5 + Math.sin(t) * R * .62]); }
+        ring.push([R, 3.5], [R, -.5]);
+        for (const [sx, sy] of ring) pos.push(p.x + r.x * sx, p.y + sy, p.z + r.z * sx);
+        if (k < span){ const Lr = ring.length, o = k * Lr; for (let j = 0; j < Lr - 1; j++) ind.push(o + j, o + Lr + j, o + j + 1, o + j + 1, o + Lr + j, o + Lr + j + 1); }
+      }
+      const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setIndex(ind); g.computeVertexNormals();
+      const tube = new THREE.Mesh(g, stylize('#6b5a78', { side:THREE.DoubleSide, cut:true, core:false })); tube.receiveShadow = true; root.add(tube);
+      // warm light strips along both walls and lamps in the roof
+      for (const s of [-1, 1]) root.add(new THREE.Mesh(this.wall(s * (R - .05), 2.2, 2.6, i0 + 2, i1 - 2, -s), emissive(s > 0 ? '#ffb15a' : '#ff6fd0', 1.6)));
+      const roofG = new THREE.BoxGeometry(3.2, .25, 1.2), roofM = emissive('#fff0d0', 1.8, { cut:true });
+      for (let k = 4; k < span - 3; k += 7){
+        const i = this.wrap(i0 + k), p = this.P[i], l = new THREE.Mesh(roofG, roofM);
+        l.position.set(p.x, p.y + 3.5 + R * .62 - .2, p.z); l.rotation.y = this.heading(i); root.add(l);
+      }
+      // portals: a stone arch and a rock face around each end
+      for (const [k, dir] of [[0, 1], [span, -1]]){
+        const i = this.wrap(i0 + k), p = this.P[i], h = this.heading(i);
+        const opening = (sh, r) => { sh.lineTo(-r, -1); sh.lineTo(-r, 3.5); sh.absellipse(0, 3.5, r, r * .62, Math.PI, 0, true); sh.lineTo(r, -1); };
+        const W = R + 14, face = new THREE.Shape(); face.moveTo(-W, -1); opening(face, R);
+        for (const [fx, fy] of [[W, -1], [W * .92, 7], [W * .6, 13], [W * .2, 15.5], [-W * .25, 15], [-W * .62, 12], [-W * .9, 6]]) face.lineTo(fx, fy);
+        face.closePath();
+        const fm = new THREE.Mesh(new THREE.ExtrudeGeometry(face, { depth:5, bevelEnabled:false }), stylize('#c98f8a', { cut:true }));
+        fm.position.set(p.x, p.y, p.z); fm.rotation.y = h; fm.translateZ(dir > 0 ? -1.5 : -3.5); fm.castShadow = fm.receiveShadow = true; root.add(fm);
+        const arch = new THREE.Shape(); arch.moveTo(-R - 1.6, -1); opening(arch, R); arch.lineTo(R + 1.6, -1); arch.lineTo(R + 1.6, 3.5); arch.absellipse(0, 3.5, R + 1.6, R * .62 + 1.6, 0, Math.PI, false); arch.closePath();
+        const am = new THREE.Mesh(new THREE.ExtrudeGeometry(arch, { depth:6, bevelEnabled:true, bevelSize:.3, bevelThickness:.3, bevelSegments:1 }), stylize('#e8d6e6', { cut:true }));
+        am.position.set(p.x, p.y, p.z); am.rotation.y = h; am.translateZ(-3); am.castShadow = am.receiveShadow = true; root.add(am);
+      }
     }
   }
-
-  buildStart(root){
-    const s0 = 4, p0 = this.P[s0], h0 = this.heading(s0);
-    const g = new THREE.Group(); g.position.copy(p0); g.rotation.y = h0; root.add(g);
-    const dark = mat('#20222c', { metalness:.6, roughness:.35 });
-    for (const s of [-1, 1]){ const leg = part(new THREE.BoxGeometry(1.4, 11, 1.4), dark, s * (HALF_W + 2), 5.5, 0); leg.rotation.z = s * .08; g.add(leg);
-      g.add(part(new THREE.BoxGeometry(.2, 10, .2), glow(s > 0 ? COLORS.cyan : COLORS.magenta), s * (HALF_W + 1.25), 5.5, .75)); }
-    const banner = new THREE.Mesh(new THREE.BoxGeometry(HALF_W * 2 + 6, 3, 1), [dark, dark, dark, dark, glow('#ffffff', { map:this.bannerTexture() }), glow('#ffffff', { map:this.bannerTexture() })]);
-    banner.position.y = 10.5; g.add(banner);
-    // start lights
-    this.startLights = [];
-    for (let i = 0; i < 5; i++){ const l = part(new THREE.CylinderGeometry(.45, .45, .3, 14), glow('#40141a'), (i - 2) * 1.4, 8.4, -.6); l.rotation.x = Math.PI / 2; g.add(l); this.startLights.push(l); }
+  buildStart(root, rng){
+    const i = 4, p = this.P[i], h = this.heading(i), r = this.R[i];
     // chequered line
-    const chk = new THREE.Mesh(new THREE.PlaneGeometry(HALF_W * 2, 3).rotateX(-Math.PI / 2), new THREE.MeshStandardMaterial({ map:this.checkerTexture(), roughness:.8 }));
-    chk.position.copy(p0); chk.position.y += .09; chk.rotation.y = h0; root.add(chk);
-    // grandstand on the outside of the start straight
-    const gs = new THREE.Group(), side = -1, i = this.wrap(s0 - 30), p = this.P[i], r = this.R[i];
-    gs.position.set(p.x + r.x * (HALF_W + 16) * side, p.y, p.z + r.z * (HALF_W + 16) * side); gs.rotation.y = this.heading(i) + Math.PI / 2 * side; root.add(gs);
-    const crowd = new THREE.InstancedMesh(new THREE.BoxGeometry(.7, .9, .6), mat('#ffffff'), 6 * 40), rng = mulberry(5), m4 = new THREE.Matrix4(), cc = new THREE.Color();
+    const c = document.createElement('canvas'); c.width = 160; c.height = 16; const g = c.getContext('2d');
+    for (let x = 0; x < 20; x++) for (let y = 0; y < 2; y++){ g.fillStyle = (x + y) % 2 ? '#2a2233' : '#fff4e6'; g.fillRect(x * 8, y * 8, 8, 8); }
+    const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace; tex.magFilter = THREE.NearestFilter;
+    const line = new THREE.Mesh(new THREE.PlaneGeometry(HALF_W * 2, 2.4).rotateX(-Math.PI / 2), stylize(texture(tex).rgb, { normal:vec3(0, 1, 0), core:false }));
+    line.position.set(p.x, p.y + .07, p.z); line.rotation.y = h; line.receiveShadow = true; root.add(line);
+    // gate: two pillars, a beam with the name, and five start lights
+    const gate = new THREE.Group(); gate.position.set(p.x, p.y, p.z); gate.rotation.y = h + Math.PI / 2; root.add(gate);
+    for (const s of [-1, 1]){ gate.add(part(new THREE.BoxGeometry(1.6, 9, 1.6), '#3a2f48', 0, 4.5, s * (HALF_W + 2.2))); gate.add(part(new THREE.BoxGeometry(2.4, .8, 2.4), '#3a2f48', 0, .4, s * (HALF_W + 2.2))); }
+    gate.add(part(new THREE.BoxGeometry(1.4, 2.2, HALF_W * 2 + 6), '#3a2f48', 0, 9.6, 0));
+    const bc = document.createElement('canvas'); bc.width = 512; bc.height = 96; const bg = bc.getContext('2d');
+    bg.fillStyle = '#2a2233'; bg.fillRect(0, 0, 512, 96); bg.fillStyle = '#fff4e6'; bg.font = '900 62px Nunito, Arial Black, sans-serif'; bg.textAlign = 'center'; bg.textBaseline = 'middle'; bg.fillText('TEKRACERS', 256, 52);
+    const bt = new THREE.CanvasTexture(bc); bt.colorSpace = THREE.SRGBColorSpace;
+    for (const s of [-1, 1]){ const banner = new THREE.Mesh(new THREE.PlaneGeometry(HALF_W * 1.6, 1.9), emissive('#ffffff', 1, {})); banner.material = new THREE.MeshBasicNodeMaterial({ map:bt }); banner.position.set(s * .72, 9.6, 0); banner.rotation.y = s * Math.PI / 2; gate.add(banner); }
+    this.startLights = [];
+    for (let k = 0; k < 5; k++){ const l = part(new THREE.SphereGeometry(.42, 12, 8), emissive('#4a1f2c', 1), -.75, 8.0, (k - 2) * 1.3, false); gate.add(l); this.startLights.push(l); }
+    // a little grandstand with a crowd beside the start
+    const stand = new THREE.Group(); stand.position.set(p.x + r.x * (HALF_W + 18) - this.T[i].x * 10, p.y, p.z + r.z * (HALF_W + 18) - this.T[i].z * 10); stand.rotation.y = h + Math.PI / 2; root.add(stand);
+    for (let s = 0; s < 4; s++) stand.add(part(new THREE.BoxGeometry(3, 1.1, 34), s % 2 ? '#e6d2c0' : '#d7bfae', s * 2.6, .55 + s * 1.1, 0));
+    stand.add(part(new THREE.BoxGeometry(12, .5, 36), '#3a2f48', 3.9, 6.6, 0));
+    for (const z of [-17, 17]) for (const x of [-1, 9]) stand.add(part(new THREE.BoxGeometry(.4, 6.4, .4), '#3a2f48', x, 3.2, z));
+    const fans = ['#ff5a4e', '#3f8cff', '#ffbe3b', '#3fd68a', '#b36bff', '#fff4e6'];
+    for (const col of fans){
+      const im = new THREE.InstancedMesh(new THREE.CapsuleGeometry(.36, .5, 2, 6), stylize(col), 22); const o = new THREE.Object3D(); let n = 0;
+      for (let q = 0; q < 22; q++){ const s = rng() * 4 | 0; o.position.set(s * 2.6 + (rng() - .5) * .8, 1.1 + s * 1.1 + .7, (rng() - .5) * 32); o.updateMatrix(); im.setMatrixAt(n++, o.matrix); }
+      im.castShadow = true; stand.add(im);
+    }
+  }
+  // wooden fences along the road edges (not on the bridge, in the tunnel or along the plaza)
+  buildFences(root){
+    const posts = [], rails = [], o = new THREE.Object3D();
+    for (const s of [-1, 1]){
+      let last = null;
+      for (let i = 0; i < this.N; i += 4){
+        const p = this.P[i], r = this.R[i], x = p.x + r.x * s * (HALF_W + 3), z = p.z + r.z * s * (HALF_W + 3);
+        const plaza = Math.abs(p.x + 50) < 150 && Math.abs(p.z) < 34;
+        if (this.kind[i] !== 'ground' || plaza || this.kind[this.wrap(i + 6)] !== 'ground' || this.kind[this.wrap(i - 6)] !== 'ground'){ last = null; continue; }
+        const y = this.height(x, z);
+        posts.push([x, y, z]);
+        if (last){ const dx = x - last[0], dz = z - last[2]; rails.push([(x + last[0]) / 2, (y + last[1]) / 2, (z + last[2]) / 2, Math.atan2(dx, dz), Math.hypot(dx, dz)]); }
+        last = [x, y, z];
+      }
+    }
+    const wood = stylize(COLORS.wood);
+    const pm = new THREE.InstancedMesh(new THREE.BoxGeometry(.32, 1.5, .32), wood, posts.length);
+    posts.forEach(([x, y, z], n) => { o.position.set(x, y + .75, z); o.rotation.set(0, 0, 0); o.scale.set(1, 1, 1); o.updateMatrix(); pm.setMatrixAt(n, o.matrix); });
+    const rm = new THREE.InstancedMesh(new THREE.BoxGeometry(.16, .2, 1), wood, rails.length * 2);
+    rails.forEach(([x, y, z, a, l], n) => { for (const [q, hy] of [[0, .55], [1, 1.15]]){ o.position.set(x, y + hy, z); o.rotation.set(0, a, 0); o.scale.set(1, 1, l + .1); o.updateMatrix(); rm.setMatrixAt(n * 2 + q, o.matrix); } });
+    for (const m of [pm, rm]){ m.castShadow = m.receiveShadow = true; root.add(m); }
+  }
+  buildLamps(root){
+    this.lamps = [];
+    for (let i = 20, s = 1; i < this.N; i += 46, s = -s){
+      if (this.kind[i] === 'tunnel') continue;
+      const p = this.P[i], r = this.R[i], off = this.kind[i] === 'bridge' ? HALF_W + 1.9 : HALF_W + 4.4;
+      const x = p.x + r.x * s * off, z = p.z + r.z * s * off, y = this.kind[i] === 'bridge' ? p.y + 1.1 : this.height(x, z);
+      const l = lamp(); l.position.set(x, y, z); root.add(l);
+      const halo = new THREE.Sprite(haloMat('#ffb766')); halo.scale.setScalar(7); halo.position.set(x, y + 6.1, z); root.add(halo);
+      this.lamps.push(l);
+    }
+  }
+
+  /* ---------- trees, bushes and rocks ---------- */
+  buildNature(root, rng, quality){
+    const lots = quality === 'low' ? .6 : 1;
+    const free = (x, z, m) => this.roadDist(x, z) > HALF_W + m && riverDist(x, z) > 3 && Math.abs(x - WORLD.x0 - WORLD.size / 2) < WORLD.size / 2 - 20 && Math.abs(z - WORLD.z0 - WORLD.size / 2) < WORLD.size / 2 - 20 && !(Math.abs(x + 50) < 156 && Math.abs(z) < 40);
+    // groves: [centre x, z, radius, count, palette]
+    const P = { cherry:['#e2566e', '#ffb2a3'], autumn:['#df5a2c', '#ffb04a'], gold:['#d09a1c', '#ffe46a'], green:['#3d9a5a', '#b2e05a'], plum:['#7a3fa0', '#e889d8'] };
+    const groves = [[110, -150, 95, 46, 'cherry'], [-300, -130, 95, 44, 'autumn'], [-60, -150, 80, 30, 'green'], [320, -260, 110, 38, 'gold'],
+      [40, 110, 130, 40, 'cherry'], [-120, -440, 90, 26, 'plum'], [180, -380, 90, 28, 'green'], [-320, 60, 90, 26, 'gold'], [330, 60, 100, 28, 'autumn'],
+      [-40, -360, 60, 12, 'green'], [-200, -400, 60, 12, 'autumn']];
+    const trees = [], bushes = [];
+    for (const [cx, cz, rad, cnt, pal] of groves){
+      let placed = 0, tries = 0;
+      while (placed < cnt * lots && tries++ < cnt * 30){
+        const a = rng() * Math.PI * 2, d = Math.sqrt(rng()) * rad, x = cx + Math.cos(a) * d, z = cz + Math.sin(a) * d;
+        if (!free(x, z, 8) || trees.some(t => Math.hypot(t.x - x, t.z - z) < 7)) continue;
+        trees.push({ x, z, y:this.height(x, z), s:.8 + rng() * .6, pal }); placed++;
+      }
+      for (let b = 0; b < cnt * .8 * lots; b++){
+        const a = rng() * Math.PI * 2, d = Math.sqrt(rng()) * rad * 1.1, x = cx + Math.cos(a) * d, z = cz + Math.sin(a) * d;
+        if (free(x, z, 4.5)) bushes.push({ x, z, y:this.height(x, z), s:.9 + rng() * 1.1, pal: rng() < .6 ? 'green' : pal });
+      }
+    }
+    // bushes along the road edges too
+    for (let i = 0; i < this.N; i += 9){
+      if (this.kind[i] !== 'ground' || rng() < .45) continue;
+      const s = rng() < .5 ? -1 : 1, off = HALF_W + 5.5 + rng() * 5, p = this.P[i], r = this.R[i], x = p.x + r.x * s * off, z = p.z + r.z * s * off;
+      if (free(x, z, 4.5)) bushes.push({ x, z, y:this.height(x, z), s:.8 + rng() * .8, pal: ['green', 'cherry', 'gold'][rng() * 3 | 0] });
+    }
+    this.trees = trees;
+    // trunks
+    const o = new THREE.Object3D(), tg = trunkGeometry();
+    const tm = new THREE.InstancedMesh(tg, stylize('#8f5b4d', { cut:true }), trees.length);
+    trees.forEach((t, n) => { o.position.set(t.x, t.y - .2, t.z); o.rotation.set(0, rng() * 6.3, 0); o.scale.set(7 * t.s, 7 * t.s, 7 * t.s); o.updateMatrix(); tm.setMatrixAt(n, o.matrix); });
+    tm.castShadow = tm.receiveShadow = true; root.add(tm);
+    // leaf puffs, one instanced mesh per palette
+    const fg = foliageGeometry(quality === 'low' ? 34 : 64, rng), groups = {};
+    const add = (pal, x, y, z, s) => (groups[pal] = groups[pal] || []).push([x, y, z, s]);
+    for (const t of trees){
+      const top = t.y + 6.2 * t.s, s = 3.1 * t.s;
+      add(t.pal, t.x, top, t.z, s * 1.15);
+      for (let k = 0; k < 3; k++){ const a = rng() * 6.3; add(t.pal, t.x + Math.cos(a) * s * .75, top - s * (.25 + rng() * .3), t.z + Math.sin(a) * s * .75, s * (.7 + rng() * .2)); }
+    }
+    for (const b of bushes) add(b.pal, b.x, b.y + b.s * .55, b.z, b.s * 1.25);
+    for (const pal in groups){
+      const list = groups[pal], im = new THREE.InstancedMesh(fg, foliageMaterial(P[pal][0], P[pal][1]), list.length);
+      list.forEach(([x, y, z, s], n) => { o.position.set(x, y, z); o.rotation.set(rng() * 6.3, rng() * 6.3, 0); o.scale.setScalar(s); o.updateMatrix(); im.setMatrixAt(n, o.matrix); });
+      im.castShadow = im.receiveShadow = true; root.add(im);
+    }
+    // rocks: scattered pebbles, and boulders around the hill
+    const rocks = [];
+    for (let k = 0; k < 170 * lots; k++){
+      const x = WORLD.x0 + 40 + rng() * (WORLD.size - 80), z = WORLD.z0 + 40 + rng() * (WORLD.size - 80);
+      if (free(x, z, 3)) rocks.push([x, this.height(x, z), z, .5 + rng() * 1.3]);
+    }
+    for (let k = 0; k < 40; k++){
+      const a = rng() * 6.3, d = HILL.r * (.55 + rng() * .5), x = HILL.x + Math.cos(a) * d, z = HILL.z + Math.sin(a) * d;
+      if (free(x, z, 5)) rocks.push([x, this.height(x, z), z, 2 + rng() * 3]);
+    }
+    const rk = new THREE.InstancedMesh(rockGeometry(rng), stylize('#cdbfd8', { cut:true }), rocks.length);
+    rocks.forEach(([x, y, z, s], n) => { o.position.set(x, y + s * .3, z); o.rotation.set(rng() * 6, rng() * 6, rng() * 6); o.scale.set(s, s * .7, s); o.updateMatrix(); rk.setMatrixAt(n, o.matrix); });
+    rk.castShadow = rk.receiveShadow = true; root.add(rk);
+  }
+
+  /* ---------- grass: blades around the camera, wrapped so they follow it ---------- */
+  buildGrass(root, quality){
+    const sub = quality === 'low' ? 150 : 230, size = 116, count = sub * sub, cell = size / sub;
+    const blade = new Float32Array(count * 9), dummy = new Float32Array(count * 9);
     let n = 0;
-    for (let t = 0; t < 6; t++){ gs.add(part(new THREE.BoxGeometry(60, 1.2, 3), mat('#3a3e4c'), 0, t * 1.2 + .6, t * 3));
-      for (let c = 0; c < 40; c++){ if (rng() < .25) continue; m4.makeTranslation(-28 + c * 1.45, t * 1.2 + 1.65, t * 3); crowd.setMatrixAt(n, m4); crowd.setColorAt(n, cc.setHSL(rng(), .7, .55)); n++; } }
-    crowd.count = n; gs.add(crowd);
-    gs.add(part(new THREE.BoxGeometry(62, .4, 20), mat('#20222c'), 0, 12, 8));
-    gs.add(part(new THREE.BoxGeometry(62, .2, .3), glow(COLORS.cyan), 0, 11.7, -1.8));
-  }
-
-  buildScenery(root, rng, quality){
-    const far = (x, z, m) => this.near(x, z, 3).d > HALF_W + m;
-    const place = (make, count, margin, test, yoff = 0) => { let n = 0, tries = 0;
-      while (n < count && tries++ < count * 40){
-        const x = WORLD.cx - 700 + rng() * 1400, z = WORLD.cz - 700 + rng() * 1400, h = this.height(x, z);
-        if (!far(x, z, margin) || (test && !test(x, z, h))) continue;
-        const o = make(rng); o.position.set(x, h + yoff, z); root.add(o); n++; } };
-    const lots = quality === 'low' ? .5 : 1;
-    const flat = (x, z, h) => h > -2 && h < 16 && Math.hypot(x - MOUNTAIN.x, z - MOUNTAIN.z) > MOUNTAIN.r * .8;
-    place(mesa, 14, 70, (x, z, h) => flat(x, z, h) && canyonDist(x, z) > 90, -2);
-    place(r => rock(r, 1.4), 120 * lots, 6, flat);
-    place(shrub, 180 * lots, 5, flat);
-    place(cactus, 70 * lots, 6, flat);
-    place(pine, 90 * lots, 8, (x, z, h) => h > 8 && h < 60 || h < CANYON_DEPTH + 4);
-    // light pylons and billboards along the road
-    for (let i = 20, s = 1; i < this.N; i += 70, s = -s){
-      if (this.kind[i] !== 'ground') continue;
-      const p = this.pos(i, s * (HALF_W + 4)), py = pylon(s > 0 ? COLORS.cyan : COLORS.magenta); py.position.copy(p); py.rotation.y = this.heading(i); root.add(py);
+    for (let i = 0; i < sub; i++) for (let j = 0; j < sub; j++){
+      const x = (i / sub - .5) * size + (Math.random() - .5) * cell, z = (j / sub - .5) * size + (Math.random() - .5) * cell, r = Math.random();
+      for (let v = 0; v < 3; v++){ blade[n++] = x; blade[n++] = z; blade[n++] = r; }
     }
-    const tex = this.billboardTexture();
-    for (const f of [.18, .42, .66, .9]){
-      const i = Math.round(this.N * f); if (this.kind[i] !== 'ground') continue;
-      const s = f > .5 ? 1 : -1, p = this.pos(i, s * (HALF_W + 9)), b = new THREE.Group(); b.position.copy(p); b.rotation.y = this.heading(i) - s * Math.PI / 2; root.add(b);
-      for (const x of [-5, 5]) b.add(part(new THREE.BoxGeometry(.5, 7, .5), mat(COLORS.dark), x, 3.5, 0));
-      b.add(part(new THREE.BoxGeometry(13, 5, .4), mat(COLORS.dark), 0, 8, 0));
-      const face = new THREE.Mesh(new THREE.PlaneGeometry(12.4, 4.4), glow('#ffffff', { map:tex })); face.position.set(0, 8, .21); b.add(face);
-    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(dummy, 3));
+    g.setAttribute('blade', new THREE.Float32BufferAttribute(blade, 3));
+    g.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e5);
+    this.grassCenter = uniform(new THREE.Vector2());
+    const S = float(size), tip = varying(step(vertexIndex.toFloat().mod(3), .5)), corner = vertexIndex.toFloat().mod(3);
+    const wpos = varying(vec2());
+    const position = Fn(() => {
+      const b = attribute('blade', 'vec3');
+      const loop = b.xy.sub(this.grassCenter), half = S.mul(.5);
+      const xz = vec2(mod(loop.x.add(half), S).sub(half), mod(loop.y.add(half), S).sub(half)).add(this.grassCenter).toVar();
+      wpos.assign(xz);
+      const uvw = toUV(xz), data = texture(this.dataTex, uvw), gy = texture(this.heightTex, uvw).r;
+      const amount = data.g, vary = texture(noiseTex, xz.mul(.021)).r.add(.45);
+      const h = float(1.15).mul(b.z.mul(.6).add(.4)).mul(vary).mul(amount);
+      const w = float(.22).mul(amount);
+      // three corners: tip, left, right; turned to face the camera
+      const sx = corner.equal(0).select(0, corner.equal(1).select(w, w.negate())), sy = tip.mul(h);
+      const ang = atan(xz.y.sub(cameraPosition.z), xz.x.sub(cameraPosition.x)).add(-Math.PI / 2);
+      const off = rotateUV(vec2(sx, 0), ang, vec2(0));
+      // wind, and blades bending away from the kart this view follows
+      const wind = windAt(xz).mul(tip).mul(h).mul(1.6);
+      const away = xz.sub(L.cut.xz), dist = away.length(), push = dist.smoothstep(4, 1.2).mul(tip).mul(h).mul(1.1);
+      const bend = wind.add(away.div(dist.max(.01)).mul(push));
+      const hidden = step(amount, .38).mul(-200);
+      return vec3(xz.x.add(off.x).add(bend.x), gy.add(sy).sub(push.mul(.4)).add(hidden), xz.y.add(off.y).add(bend.y));
+    })();
+    const data = texture(this.dataTex, toUV(wpos));
+    const col = mix(color('#b8b62e'), color('#d9c642'), texture(noiseTex, wpos.mul(.011)).r.smoothstep(.3, .75));
+    const m = stylize(mix(col, color('#e8d070'), tip.mul(.25)), { normal:vec3(0, 1, 0), shadow:tip.oneMinus().mul(.55).mul(data.g), position, bounce:false, side:THREE.DoubleSide, cut:true });
+    const mesh = new THREE.Mesh(g, m); mesh.frustumCulled = false; mesh.receiveShadow = true; mesh.castShadow = false;
+    root.add(mesh); this.grass = mesh;
   }
-
-  /* ---------- canvas textures ---------- */
-  canvas(w, h, draw){ const c = document.createElement('canvas'); c.width = w; c.height = h; draw(c.getContext('2d'), w, h); const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8; return t; }
-  roadTexture(){
-    const t = this.canvas(256, 256, (g, w, h) => {
-      g.fillStyle = '#34363f'; g.fillRect(0, 0, w, h);
-      const r = mulberry(3); for (let i = 0; i < 1400; i++){ g.fillStyle = r() < .5 ? 'rgba(0,0,0,.12)' : 'rgba(255,255,255,.06)'; g.fillRect(r() * w, r() * h, 2, 2); }
-      g.fillStyle = 'rgba(255,255,255,.9)'; g.fillRect(16, 0, 5, h); g.fillRect(w - 21, 0, 5, h);
-      g.fillStyle = 'rgba(255,214,90,.9)'; g.fillRect(w * .5 - 3, 0, 6, h * .45);
-    });
-    t.wrapS = t.wrapT = THREE.RepeatWrapping; return t;
-  }
-  checkerTexture(){
-    return this.canvas(256, 64, (g, w, h) => { const n = 12; for (let i = 0; i < n; i++) for (let j = 0; j < 3; j++){ g.fillStyle = (i + j) % 2 ? '#111' : '#fff'; g.fillRect(i * w / n, j * h / 3, w / n + 1, h / 3 + 1); } });
-  }
-  bannerTexture(){
-    return this.canvas(1024, 128, (g, w, h) => {
-      const gr = g.createLinearGradient(0, 0, w, 0); gr.addColorStop(0, '#12081f'); gr.addColorStop(.5, '#1d0f33'); gr.addColorStop(1, '#12081f');
-      g.fillStyle = gr; g.fillRect(0, 0, w, h);
-      g.font = 'italic 900 86px "Russo One", "Arial Black", sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
-      g.shadowColor = '#3ff6ff'; g.shadowBlur = 24; g.fillStyle = '#ffffff'; g.fillText('TEKRACERS', w / 2, h / 2 + 4);
-      g.shadowBlur = 0; g.fillStyle = '#ff3df2'; g.fillRect(0, h - 8, w, 8); g.fillStyle = '#3ff6ff'; g.fillRect(0, 0, w, 8);
-    });
-  }
-  billboardTexture(){
-    return this.canvas(512, 180, (g, w, h) => {
-      const gr = g.createLinearGradient(0, 0, w, h); gr.addColorStop(0, '#ff3df2'); gr.addColorStop(1, '#3a1cff'); g.fillStyle = gr; g.fillRect(0, 0, w, h);
-      g.font = 'italic 900 70px "Russo One", "Arial Black", sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillStyle = '#fff'; g.fillText('TEKRAMOS', w / 2, h / 2 - 12);
-      g.font = '700 26px "Exo 2", sans-serif'; g.fillText('www.tekramos.com', w / 2, h / 2 + 46);
-    });
+  // lights on the start gate: count 3, 2, 1 turns red ones on; 0 is GO (all green); -1 is off
+  setStartLights(n){
+    const lit = n === 0 ? 5 : n >= 3 ? 2 : n === 2 ? 4 : 5;
+    this.startLights.forEach((l, i) => l.material = n === 0 ? emissive('#3dff8a', 2.2) : n > 0 && i < lit ? emissive('#ff2a3c', 2.2) : emissive('#4a1f2c', 1));
   }
 }

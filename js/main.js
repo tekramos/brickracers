@@ -6,9 +6,12 @@
      screen (split only if two of them share that device). This browser is the host.
    ============================================================ */
 import * as THREE from 'three';
+import { pass } from 'three/tsl';
+import { bloom } from 'three/addons/tsl/display/BloomNode.js';
 import { Track } from './track.js';
 import { Race, PU, AI_NAMES } from './race.js';
-import { PLAYER_COLORS, basic } from './models.js';
+import { PLAYER_COLORS } from './models.js';
+import { L as LOOK, PRESETS, setPreset, setFogRange, fogColor, makeSun, emissive } from './look.js';
 import { PadHost } from './padhost.js';
 import { NetHost, NetClient } from './net.js';
 import { Snd } from './audio.js';
@@ -18,14 +21,17 @@ const store = { get(k){ try { return localStorage.getItem(k); } catch (e) { retu
 const QS = new URLSearchParams(location.search);
 const opts = {
   laps: Math.max(1, Math.min(9, +store.get('br-laps') || 3)), ai: store.get('br-ai') !== '0',
-  q: QS.get('q') || store.get('br-q') || 'high', rend: QS.has('webgl') ? 'webgl' : store.get('br-rend') || 'auto',
+  q: QS.get('q') || store.get('br-q') || (/Mobi|Android|iPhone|iPad/i.test(navigator.userAgent) ? 'low' : 'high'), rend: QS.has('webgl') ? 'webgl' : store.get('br-rend') || 'auto',
+  cam: QS.get('cam') || store.get('br-cam') || 'top', tod: QS.get('tod') || store.get('br-tod') || 'dusk',
 };
+const TODS = ['day', 'dusk', 'night', 'dawn', 'cycle'], TOD_NAMES = { day:'Day', dusk:'Sunset', night:'Night', dawn:'Dawn', cycle:'Cycle' };
+Race.camMode = opts.cam === 'chase' ? 'chase' : 'top';
 const ord = n => n + (['th', 'st', 'nd', 'rd'][(n % 100 - 20) % 10] || ['th', 'st', 'nd', 'rd'][n % 100] || 'th');
 const ordHtml = n => n + '<sup>' + (['th', 'st', 'nd', 'rd'][(n % 100 - 20) % 10] || ['th', 'st', 'nd', 'rd'][n % 100] || 'th') + '</sup>';
 const JOIN = (QS.get('join') || '').toUpperCase().replace(/[^A-Z]/g, '').slice(0, 4); // set on a joining device
 const fmt = t => { const m = Math.floor(t / 60), s = t - m * 60; return m + ':' + (s < 10 ? '0' : '') + s.toFixed(2); };
 
-let renderer, scene, track, race = null, demo = null, state = 'loading', overview, demoCam, demoIdx = 0, demoT = 0;
+let renderer, scene, track, race = null, demo = null, state = 'loading', overview, demoCam, demoIdx = 0, demoT = 0, sun, post = null, scenePass = null, todT = 0, demoYaw = 0, demoSnap = true;
 const slots = new Array(5).fill(null);
 const pads = new PadHost();
 const net = new NetHost();      // host: devices joining online
@@ -47,27 +53,31 @@ async function boot(){
     const dev = renderer.backend.device; if (dev && dev.lost) dev.lost.then(i => { if (i.reason !== 'destroyed') fallback(); });
     addEventListener('error', e => { if (/GPU|popErrorScope|WebGPU/i.test(e.message || '') && ++errs > 3) fallback(); });
   }
-  renderer.setPixelRatio(Math.min(devicePixelRatio || 1, opts.q === 'low' ? 1 : 1.75));
+  renderer.setPixelRatio(pixelRatio());
   renderer.setSize(innerWidth, innerHeight);
   renderer.toneMapping = THREE.NoToneMapping;
+  renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFShadowMap;
   const backend = renderer.backend && renderer.backend.isWebGPUBackend ? 'WebGPU' : 'WebGL 2';
   $('#badge').textContent = backend + ' · three.js r' + THREE.REVISION;
   $('#orend').textContent = opts.rend === 'webgl' ? 'WebGL' : 'Auto (' + backend + ')';
   if (gpuFailed && opts.rend !== 'webgl') $('#badge').textContent += ' (WebGPU failed on this device)';
 
+  // the sky is the same colour gradient the fog fades to; one warm key light makes every shadow
   scene = new THREE.Scene();
-  scene.background = new THREE.Color('#ff9a5c');
-  scene.fog = new THREE.Fog('#f0936a', 220, 900);
+  scene.backgroundNode = fogColor;
+  setPreset(opts.tod === 'cycle' ? 'day' : opts.tod);
   track = new Track(); track.build(scene, opts.q);
-  // warm low sun from the sunset, cool purple sky light from above
-  scene.add(new THREE.HemisphereLight('#9fa8ff', '#7a3b2a', 1.25));
-  const sun = new THREE.DirectionalLight('#ffd2a0', 3.1); sun.position.copy(track.sunDir).multiplyScalar(300).setY(160); scene.add(sun);
-  const fill = new THREE.DirectionalLight('#7fb8ff', .6); fill.position.set(200, 120, 300); scene.add(fill);
-  // overview camera for the spare split-screen cell: the whole canyon circuit from above
-  overview = new THREE.PerspectiveCamera(42, 1, 10, 2500); overview.position.set(-9, 600, 60); overview.lookAt(-9, 0, -200); overview.layers.enable(1);
-  demoCam = new THREE.PerspectiveCamera(60, 1, .3, 2000);
+  sun = makeSun(scene, opts.q);
+  // overview camera for the spare split-screen cell: the whole park from above
+  mapBounds();
+  overview = new THREE.PerspectiveCamera(34, 1, 20, 3000); overview.layers.enable(1);
+  overview.position.set(mb.cx, mb.s * 1.45, mb.cz + mb.s * .62); overview.lookAt(mb.cx, 0, mb.cz + mb.s * .05);
+  demoCam = new THREE.PerspectiveCamera(30, 1, 1, 1600);
+  setupPost();
 
   addEventListener('resize', () => renderer.setSize(innerWidth, innerHeight));
+  // build every material once behind the loading screen so the first frames don't stutter
+  try { await renderer.compileAsync(scene, demoCam); } catch (e) {}
   setupInput();
   if (JOIN) setupJoin();
   else {
@@ -82,6 +92,26 @@ async function boot(){
   $('#loading').style.display = 'none';
   let last = performance.now();
   renderer.setAnimationLoop(() => { const now = performance.now(), dt = Math.min(.05, (now - last) / 1000); last = now; frame(dt); });
+}
+
+const pixelRatio = () => Math.min(devicePixelRatio || 1, opts.q === 'low' ? 1 : 1.5);
+// bloom on the bright lights (one full-screen view only; split screens draw straight to the screen)
+function setupPost(){
+  if (opts.q === 'low' || !THREE.RenderPipeline){ post = null; return; }
+  post = new THREE.RenderPipeline(renderer);
+  scenePass = pass(scene, demoCam);
+  const col = scenePass.getTextureNode('output'), b = bloom(col);
+  b.threshold.value = 1; b.strength.value = .28; b.smoothWidth.value = 1; b._nMips = 3;
+  post.outputNode = col.add(b);
+}
+// time of day: a fixed preset, or a slow cycle through all four
+const CYCLE = ['day', 'dusk', 'night', 'dawn'], CYCLE_T = 60;
+function updateTod(dt){
+  LOOK.time.value += dt;
+  if (opts.tod !== 'cycle') return;
+  todT = (todT + dt) % (CYCLE_T * 4);
+  const i = Math.floor(todT / CYCLE_T), f = todT / CYCLE_T - i, blend = THREE.MathUtils.smoothstep(f, .7, 1);
+  setPreset(CYCLE[i], CYCLE[(i + 1) % 4], blend);
 }
 
 /* ---------- players ---------- */
@@ -158,6 +188,7 @@ function setupInput(){
       if (e.code === 'Escape' || e.code === 'KeyP'){ if (state === 'race') pause(); else if (state === 'pause') resume(); }
     }
     if (e.code === 'KeyM'){ Snd.toggleMusic(); renderOpts(); }
+    if (e.code === 'KeyC'){ opts.cam = opts.cam === 'top' ? 'chase' : 'top'; Race.camMode = opts.cam; store.set('br-cam', opts.cam); snapCams(); if (!JOIN) renderOpts(); }
   });
   addEventListener('keyup', e => keys.delete(e.code));
   addEventListener('blur', () => keys.clear());
@@ -190,11 +221,13 @@ function setupLobby(){
     if (o === 'laps-') opts.laps = Math.max(1, opts.laps - 1);
     if (o === 'laps+') opts.laps = Math.min(9, opts.laps + 1);
     if (o === 'ai') opts.ai = !opts.ai;
-    if (o === 'q'){ opts.q = opts.q === 'high' ? 'low' : 'high'; renderer.setPixelRatio(Math.min(devicePixelRatio || 1, opts.q === 'low' ? 1 : 1.75)); renderer.setSize(innerWidth, innerHeight); }
+    if (o === 'q'){ opts.q = opts.q === 'high' ? 'low' : 'high'; store.set('br-q', opts.q); location.reload(); return; }
+    if (o === 'cam'){ opts.cam = opts.cam === 'top' ? 'chase' : 'top'; Race.camMode = opts.cam; snapCams(); }
+    if (o === 'tod'){ opts.tod = TODS[(TODS.indexOf(opts.tod) + 1) % TODS.length]; if (opts.tod !== 'cycle') setPreset(opts.tod); else todT = 0; }
     if (o === 'rend'){ opts.rend = opts.rend === 'webgl' ? 'auto' : 'webgl'; store.set('br-rend', opts.rend); location.reload(); return; }
     if (o === 'mus') Snd.toggleMusic();
     if (o === 'snd') Snd.toggleSound();
-    store.set('br-laps', opts.laps); store.set('br-ai', opts.ai ? '1' : '0'); store.set('br-q', opts.q);
+    store.set('br-laps', opts.laps); store.set('br-ai', opts.ai ? '1' : '0'); store.set('br-q', opts.q); store.set('br-cam', opts.cam); store.set('br-tod', opts.tod);
     renderOpts();
   });
   renderOpts(); renderSlots();
@@ -202,6 +235,9 @@ function setupLobby(){
 function renderOpts(){
   $('#olaps').textContent = opts.laps; $('#oai').textContent = opts.ai ? 'On' : 'Off'; $('#oq').textContent = opts.q === 'high' ? 'High' : 'Low';
   $('#omus').textContent = Snd.musicOn ? 'On' : 'Off'; $('#osnd').textContent = Snd.soundOn ? 'On' : 'Off';
+  $('#ocam').textContent = opts.cam === 'top' ? 'Top' : 'Chase'; $('#otod').textContent = TOD_NAMES[opts.tod] || 'Sunset';
+}
+function snapCams(){ for (const r of [race, demo]) if (r) for (const k of r.karts){ k.snap = true; k.cam.fov = Race.camMode === 'top' ? 30 : 62; k.cam.updateProjectionMatrix(); }
 }
 function renderSlots(){
   const el = $('#slots'); el.innerHTML = '';
@@ -248,7 +284,7 @@ function toLobby(){
 function startDemo(){
   if (demo) demo.dispose();
   demo = new Race(scene, track, PLAYER_COLORS.map((c, i) => ({ slot:i, kind:'ai', name:AI_NAMES[i], color:c, input:{}, notify(){} })), 99);
-  demo.count = .7; demoT = 0;
+  demo.count = .7; demoT = 0; demoSnap = true;
 }
 function startRace(){
   if (!slots.some(s => s && s.connected)){ big('Join first!', true); return; }
@@ -265,7 +301,7 @@ function startRace(){
   race = new Race(scene, track, players, opts.laps);
   race.log = []; raceId++; grid = players.map(p => [p.slot, p.kind === 'ai' ? 'ai' : 'p', p.name, p.color]);
   // markers above each kart for the overview camera only
-  for (const k of race.karts){ const m = new THREE.Mesh(new THREE.ConeGeometry(7, 14, 4).rotateX(Math.PI), basic(k.pl.color)); m.position.y = 18; m.layers.set(1); k.mesh.add(m); }
+  for (const k of race.karts){ const m = new THREE.Mesh(markerG, emissive(k.pl.color, 1.6)); m.position.y = 22; m.layers.set(1); k.mesh.add(m); }
   race.onEvent = e => {
     pads.send(Object.assign({ t:'ev' }, e)); netEvent(['e', e, -1]);
     if (e.e === 'count'){ big(e.n); startLights(e.n); } if (e.e === 'go'){ big('GO!'); startLights(0); }
@@ -276,6 +312,7 @@ function startRace(){
   $('#hud').classList.remove('hidden'); $('#timer').classList.remove('hidden');
   buildHud(); Snd.music(true);
 }
+const markerG = new THREE.ConeGeometry(9, 18, 4).rotateX(Math.PI);
 function pause(){ state = 'pause'; $('#pause').classList.remove('hidden'); Snd.play('back'); }
 function resume(){ state = 'race'; $('#pause').classList.add('hidden'); Snd.play('select'); }
 function showResults(){ state = 'results'; showResultsList(race.results()); }
@@ -346,15 +383,15 @@ function drawMini(){
   const pad = 12, k = (S - pad * 2) / mb.s, P = (x, z) => [S / 2 + (x - mb.cx) * k, S / 2 + (z - mb.cz) * k];
   g.lineJoin = 'round'; g.lineCap = 'round';
   const path = () => { g.beginPath(); track.P.forEach((p, i) => { if (i % 4) return; const [a, b] = P(p.x, p.z); i ? g.lineTo(a, b) : g.moveTo(a, b); }); g.closePath(); };
-  path(); g.strokeStyle = 'rgba(8,6,20,.7)'; g.lineWidth = 9; g.stroke();
-  path(); g.strokeStyle = '#3ff6ff'; g.lineWidth = 3.5; g.shadowColor = '#3ff6ff'; g.shadowBlur = 8; g.stroke(); g.shadowBlur = 0;
+  path(); g.strokeStyle = 'rgba(40,14,58,.72)'; g.lineWidth = 10; g.stroke();
+  path(); g.strokeStyle = '#ffe9d2'; g.lineWidth = 4; g.stroke();
   // the bridge in orange, the tunnel dashed
-  for (const [kind, col, dash] of [['bridge', '#ffa040', []], ['tunnel', '#ff3df2', [3, 4]]]){
+  for (const [kind, col, dash] of [['bridge', '#ff9a4e', []], ['tunnel', '#b28cff', [3, 4]]]){
     g.beginPath(); let on = false;
     track.P.forEach((p, i) => { if (i % 2) return; const [a, b] = P(p.x, p.z); if (track.kind[i] === kind){ on ? g.lineTo(a, b) : g.moveTo(a, b); on = true; } else on = false; });
     g.setLineDash(dash); g.strokeStyle = col; g.lineWidth = 4; g.stroke(); g.setLineDash([]);
   }
-  const [sx, sy] = P(track.P[4].x, track.P[4].z); g.fillStyle = '#fff'; g.fillRect(sx - 4, sy - 2, 8, 4);
+  const [sx, sy] = P(track.P[4].x, track.P[4].z); g.fillStyle = '#2d1640'; g.fillRect(sx - 2, sy - 6, 4, 12);
   for (const kk of [...race.karts].reverse()){ const [a, b] = P(kk.x, kk.z); g.fillStyle = kk.pl.color; g.strokeStyle = kk.pl.kind === 'ai' ? 'rgba(8,6,20,.8)' : '#fff'; g.lineWidth = 2; g.beginPath(); g.arc(a, b, kk.pl.kind === 'ai' ? 4 : 6, 0, 7); g.fill(); g.stroke(); }
 }
 function updateHud(){
@@ -382,8 +419,7 @@ function viewFlash(s){ const h = hud.find(h => h.k.pl.slot === s.i); if (!h) ret
 let lightsN = -1;
 function startLights(n){
   if (n === lightsN) return; lightsN = n;
-  const lit = n === 0 ? 5 : n >= 3 ? 2 : n === 2 ? 4 : 5;
-  track.startLights.forEach((l, i) => l.material = basic(n === 0 ? '#3dff8a' : n > 0 && i < lit ? '#ff2a3c' : '#40141a'));
+  track.setStartLights(n);
 }
 function gflash(col){ const f = $('#gflash'); f.style.background = col; f.style.transition = 'none'; f.style.opacity = .6; void f.offsetWidth; f.style.transition = 'opacity .6s'; f.style.opacity = 0; }
 function big(t, small){ const b = $('#big'); b.textContent = t; b.style.fontSize = small ? 'clamp(40px,9vmin,110px)' : ''; b.classList.remove('pop'); void b.offsetWidth; b.classList.add('pop'); }
@@ -402,13 +438,27 @@ function feed(dt){
 }
 
 /* ---------- frame ---------- */
-const view = (cam, x, y, w, h) => {
+// set the shared look for one view: what it follows (see-through cut, shadows, grass) and how far its fog reaches
+const tmpV = new THREE.Vector3(), kpos = new THREE.Vector3(), noCut = new THREE.Vector3(0, -999, 0);
+function prepView(cam, focus, kartPos, kind){
+  LOOK.cut.value.copy(kartPos || noCut);
+  const d = cam.position.distanceTo(focus);
+  LOOK.cutR.value = kind === 'top' ? 12 : 7.5;
+  if (kind === 'top'){ setFogRange(d * 1.05, d * 2.3); sun.aim(focus, Math.min(110, d * .95)); }
+  else if (kind === 'map'){ setFogRange(5000, 6000); sun.aim(focus, 60); }
+  else { setFogRange(26, 240); sun.aim(tmpV.copy(cam.position).lerp(focus, .5).setY(focus.y), 70); }
+  if (kind === 'map') track.grassCenter.value.set(1e5, 1e5); else track.grassCenter.value.set(focus.x, focus.z);
+}
+const view = (cam, x, y, w, h, full) => {
   const W = innerWidth, H = innerHeight, px = Math.floor(x * W), py = Math.floor(y * H), pw = Math.ceil(w * W), ph = Math.ceil(h * H);
-  renderer.setViewport(px, py, pw, ph); renderer.setScissor(px, py, pw, ph);
   if (cam.isPerspectiveCamera){ const a = pw / ph; if (Math.abs(cam.aspect - a) > 1e-3){ cam.aspect = a; cam.updateProjectionMatrix(); } }
+  if (full && post){ scenePass.camera = cam; renderer.setScissorTest(false); renderer.setViewport(0, 0, W, H); post.render(); return; }
+  renderer.setViewport(px, py, pw, ph); renderer.setScissor(px, py, pw, ph);
   renderer.render(scene, cam);
 };
+const kartView = k => { prepView(k.cam, k.focus, kpos.set(k.x, k.y, k.z), Race.camMode); return k.cam; };
 function frame(dt){
+  updateTod(dt);
   // keep the gantry lights in step with the race even if a count event was missed (joining devices)
   const lr = race || demo; if (lr) startLights(lr.state === 'countdown' ? (lightsN > 0 ? lightsN : -1) : 0);
   if (!JOIN){ pads.tick(); readInputs(); feed(dt); } else readLocal();
@@ -417,19 +467,17 @@ function frame(dt){
   if ((state === 'lobby' || JOIN && !race) && demo){
     if (!JOIN) hostSnap(dt);
     demo.update(dt); demoT += dt;
-    if (demoT > 9){ demoT = 0; demoIdx = (demoIdx + 1) % demo.karts.length; }
+    if (demoT > 12){ demoT = 0; demoIdx = (demoIdx + 1) % demo.karts.length; demoSnap = true; }
     if (demo.time > 150) startDemo();
     const k = demo.order ? demo.order[demoIdx % demo.karts.length] : demo.karts[0];
-    // a slow cinematic camera: high and to the side of the kart
-    const f = new THREE.Vector3(Math.sin(k.h), 0, Math.cos(k.h)), r = new THREE.Vector3(-f.z, 0, f.x), a = demoT / 9;
-    // inside the tunnel stay close behind; elsewhere keep the camera above the ground
-    const inTunnel = track.kind[k.idx] === 'tunnel' || track.kind[track.wrap(k.idx - 14)] === 'tunnel';
-    const want = inTunnel ? new THREE.Vector3(k.x, k.y + 3.2, k.z).addScaledVector(f, -9)
-      : new THREE.Vector3(k.x, k.y, k.z).addScaledVector(f, -14 + a * 4).addScaledVector(r, 8 - a * 10).add(new THREE.Vector3(0, 6 + Math.sin(a * 3) * 2, 0));
-    if (!inTunnel) want.y = Math.max(want.y, track.height(want.x, want.z) + 2.5);
-    demoCam.position.lerp(want, demoT < .05 ? 1 : 1 - Math.exp(-dt * 3)); demoCam.lookAt(k.x, k.y + 1.5, k.z);
+    // a slow orbit around the kart, high up like a diorama
+    demoYaw += dt * .12;
+    const d = 92, el = .62, h = Math.cos(el) * d;
+    const want = new THREE.Vector3(k.focus.x - Math.sin(k.h + demoYaw) * h, k.focus.y + Math.sin(el) * d, k.focus.z - Math.cos(k.h + demoYaw) * h);
+    demoCam.position.lerp(want, demoSnap ? 1 : 1 - Math.exp(-dt * 1.2)); demoSnap = false; demoCam.lookAt(k.focus);
     Snd.engine(0, false);
-    renderer.setScissorTest(false); view(demoCam, 0, 0, 1, 1);
+    prepView(demoCam, k.focus, null, 'top');
+    renderer.setScissorTest(false); view(demoCam, 0, 0, 1, 1, true);
     return;
   }
   if (JOIN){ joinFrame(dt); return; }
@@ -444,12 +492,13 @@ function renderRace(){
   const sp = humans.length ? Math.max(...humans.map(k => Math.abs(k.speed))) / 40 : 0;
   Snd.engine(sp, state === 'race' || state === 'results');
   updateHud();
-  renderer.setScissorTest(true);
   // nobody plays on this screen (everyone is online): watch the leader
-  if (!humans.length){ const lead = (race.order || race.karts)[0]; view(lead.cam, 0, 0, 1, 1); renderer.setScissorTest(false); return; }
+  if (!humans.length){ const lead = (race.order || race.karts)[0]; renderer.setScissorTest(false); view(kartView(lead), 0, 0, 1, 1, true); return; }
+  if (humans.length === 1){ renderer.setScissorTest(false); view(kartView(humans[0]), 0, 0, 1, 1, true); return; }
+  renderer.setScissorTest(true);
   const L = layout(humans.length);
-  humans.forEach((k, i) => view(k.cam, ...L.views[i]));
-  if (L.spare){ const fog = scene.fog; scene.fog = null; view(overview, ...L.spare); scene.fog = fog; }
+  humans.forEach((k, i) => view(kartView(k), ...L.views[i]));
+  if (L.spare){ prepView(overview, tmpV.set(mb.cx, 0, mb.cz), null, 'map'); view(overview, ...L.spare); }
   renderer.setScissorTest(false);
 }
 

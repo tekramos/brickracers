@@ -6,9 +6,11 @@
      yellow : oil slick · mine · mine field · shockwave around you
      blue   : shield · long shield · spike shield (spins karts you touch) · super shield
      green  : turbo · big turbo · mega turbo · warp forward
+   Drifting: hold brake while steering at speed to slide; hold the slide to charge a mini turbo.
    ============================================================ */
 import * as THREE from 'three';
-import { kart, core, mat, basic, blob, COLORS } from './models.js';
+import { kart, core, blob, COLORS } from './models.js';
+import { stylize, emissive, Particles, Skids } from './look.js';
 import { HALF_W } from './track.js';
 import { Snd } from './audio.js';
 
@@ -34,6 +36,7 @@ export class Race {
     this.projectiles = []; this.hazards = []; this.fx = []; this.bricks = [];
     // online: `log` collects effects and sounds for joiners (host), `client` mirrors the host's race (joiner)
     this.nid = 0; this.log = null; this.client = false;
+    this.parts = new Particles(this.root, 600); this.skids = new Skids(this.root, 1200);
     this.karts = players.map((pl, i) => this.makeKart(pl, i));
     this.placeBricks();
   }
@@ -46,12 +49,10 @@ export class Race {
     this.root.add(mesh);
     const k = { pl, mesh, x:p.x, z:p.z, y:p.y, h:t.heading(idx), vx:0, vz:0, idx, prog: -(t.wrap(START - idx)), lapDone:0,
       place:i + 1, fin:false, finT:0, pu:null, w:0, spin:0, flip:0, boost:0, shield:0, shieldLvl:0, inv:0, wrongT:0, wrong:false,
-      wheel:0, steer:0, look:0, speed:0, bumpT:0,
-      cam: new THREE.PerspectiveCamera(70, 1, .3, 2000), camPos:new THREE.Vector3(), camLook:new THREE.Vector3(),
+      wheel:0, steer:0, look:0, speed:0, bumpT:0, drift:0, dch:0, roll:0, pitch:0, susp:0, suspV:0, lastF:0, skidAt:[null, null], dustT:0,
+      cam: new THREE.PerspectiveCamera(30, 1, 1, 1600), camPos:new THREE.Vector3(), camLook:new THREE.Vector3(), camYaw:0, camDist:60, focus:new THREE.Vector3(), snap:true,
       ai: pl.kind === 'ai' ? { lane:(Math.random() - .5) * 8, laneT:0, skill:.9 + Math.random() * .07, hold:0 } : null };
-    // start the camera behind the kart
-    const f = new THREE.Vector3(Math.sin(k.h), 0, Math.cos(k.h));
-    k.camPos.set(k.x - f.x * 10, k.y + 4.5, k.z - f.z * 10); k.camLook.set(k.x + f.x * 6, k.y + 1.2, k.z + f.z * 6);
+    k.camYaw = k.h; k.focus.set(k.x, k.y, k.z);
     return k;
   }
 
@@ -128,16 +129,26 @@ export class Race {
     if (dt > 0){
       if (k.boost > 0) fwd += (max - fwd) * Math.min(1, dt * 4);
       else if (gas) fwd += ACCEL * dt * Math.max(0, 1 - fwd / max) * (fwd < 12 ? 1.6 : 1);
-      if (brake){ if (fwd > .5) fwd -= BRAKE * dt; else fwd = Math.max(-REVERSE, fwd - ACCEL * .6 * dt); }
+      // drift: brake + steer at speed slides the kart instead of braking hard (players only)
+      if (!k.ai && !k.fin && brake && Math.abs(steer) > .35 && fwd > 16 && !k.drift) k.drift = Math.sign(steer);
+      if (k.drift && (!brake || fwd < 9 || stunned)){
+        if (k.dch > .8 && !stunned){ k.boost = Math.max(k.boost, k.dch > 1.8 ? .9 : .5); this.snd('turbo', k); }
+        k.drift = 0; k.dch = 0;
+      }
+      if (k.drift){ fwd -= 3 * dt; k.dch += dt; if (gas) fwd += ACCEL * .4 * dt * Math.max(0, 1 - fwd / max); }
+      else if (brake){ if (fwd > .5) fwd -= BRAKE * dt; else fwd = Math.max(-REVERSE, fwd - ACCEL * .6 * dt); }
       if (!gas && !brake && k.boost <= 0) fwd -= fwd * .6 * dt;
       if (fwd > max) fwd += (max - fwd) * Math.min(1, dt * 2);
       // steering: stronger at low speed, gentler at full speed, reversed when backing up
       const sp = Math.abs(fwd), turn = TURN * Math.min(1, sp / 8) * (1 - .3 * Math.min(1, sp / MAX_SPEED)) * Math.sign(fwd || 1);
-      k.h -= k.steer * turn * dt;
+      // drifting: the kart turns harder towards the drift side, and the slide pushes it outwards
+      const dSteer = k.drift ? clamp(k.steer * .6 + k.drift * .55, -1.15, 1.15) : k.steer;
+      k.h -= dSteer * turn * dt * (k.drift ? 1.3 : 1);
+      if (k.drift) lat += k.drift * sp * 1.1 * dt;
       if (k.spin > 0) { k.h += dt * 9; fwd *= Math.pow(.25, dt); }
       if (k.flip > 0) fwd *= Math.pow(.2, dt);
       // keep sideways slide low: a touch of drift when cornering hard
-      lat *= Math.exp(-GRIP * dt * (k.spin > 0 ? .2 : 1));
+      lat *= Math.exp(-GRIP * dt * (k.spin > 0 ? .2 : k.drift ? .32 : 1));
       const nfx = Math.sin(k.h), nfz = Math.cos(k.h), nrx = -Math.cos(k.h), nrz = Math.sin(k.h);
       k.vx = nfx * fwd + nrx * lat; k.vz = nfz * fwd + nrz * lat;
       k.x += k.vx * dt; k.z += k.vz * dt;
@@ -169,6 +180,12 @@ export class Race {
     k.wrong = k.wrongT > 1.2;
     k.speed = fwd; k.ly = loc.y; k.slope = loc.slope;
     this.pose(k, rdt);
+    // drift sparks: blue, then orange once the mini turbo is charged
+    if (k.drift && this.state !== 'countdown'){
+      const col = k.dch > 1.8 ? '#ff9a3c' : k.dch > .8 ? '#5fd8ff' : '#ffffff';
+      if (Math.random() < rdt * 40) for (const s of [-1, 1]){ const rx = -Math.cos(k.h), rz = Math.sin(k.h), bx = k.x - Math.sin(k.h) * 1.3 + rx * s * 1.1, bz = k.z - Math.cos(k.h) * 1.3 + rz * s * 1.1;
+        this.parts.add(bx, k.y + .3, bz, (Math.random() - .5) * 4 - Math.sin(k.h) * 4, 2 + Math.random() * 3, (Math.random() - .5) * 4 - Math.cos(k.h) * 4, .1 + Math.random() * .08, .35, col, 'spark', k.y); }
+    }
   }
   // place the kart model from its state: position, tilt, wheels, driver, shield and flames
   pose(k, rdt){
@@ -178,9 +195,20 @@ export class Race {
     m.rotation.y = k.h;
     m.rotation.x = -Math.atan2(k.slope, 1) * .9;
     const body = m.userData.body;
-    body.rotation.z = -k.steer * Math.min(1, Math.abs(fwd) / MAX_SPEED) * .12;
-    body.rotation.x = k.flip > 0 ? (1 - k.flip / 1.4) * Math.PI * 2 : 0;
-    body.position.y = k.flip > 0 ? 1 : Math.sin(this.time * 30 + k.pl.slot) * .02 * Math.min(1, Math.abs(fwd) / 10);
+    // body on springs: it leans out of corners, squats when accelerating and dives when braking
+    const fx = Math.sin(k.h), fz = Math.cos(k.h), lat = k.vx * -fz + k.vz * fx;
+    const dtc = Math.max(rdt, 1e-3), accF = (fwd - k.lastF) / dtc;
+    k.lastF = fwd;
+    const wantRoll = clamp(-k.steer * Math.min(1, Math.abs(fwd) / MAX_SPEED) * .14 - lat * .012, -.22, .22) + (k.drift ? k.drift * .07 : 0);
+    const wantPitch = clamp(-accF * .0035, -.09, .09);
+    const sa = 1 - Math.exp(-rdt * 9); k.roll += (wantRoll - k.roll) * sa; k.pitch += (wantPitch - k.pitch) * sa;
+    k.suspV += (-k.susp * 260 - k.suspV * 14) * rdt + (Math.random() - .5) * Math.min(1, Math.abs(fwd) / 20) * 4 * rdt; k.susp += k.suspV * rdt;
+    body.rotation.z = k.roll;
+    body.rotation.x = k.flip > 0 ? (1 - k.flip / 1.4) * Math.PI * 2 : k.pitch;
+    body.position.y = k.flip > 0 ? 1 : k.susp;
+    // a drifting kart is drawn turned a little more into the slide
+    body.rotation.y += ((k.drift ? -k.drift * .32 : clamp(-lat * .02, -.2, .2)) - body.rotation.y) * sa;
+    this.trail(k, rdt, lat, fwd);
     m.userData.blob.position.y = .06 - flipH; m.userData.blob.scale.setScalar(1 / (1 + flipH * .15));
     k.wheel += fwd * rdt / .55;
     for (const w of m.userData.wheels) w.children[0].rotation.x = k.wheel;
@@ -189,6 +217,26 @@ export class Race {
     if (m.userData.shield.visible){ m.userData.shield.material.color.set(k.shieldLvl >= 2 ? '#ff9de2' : '#6fd0ff'); m.userData.shield.rotation.y += rdt * 2; }
     const fl = m.userData.flames; fl.visible = k.boost > 0; if (fl.visible) fl.scale.set(1, 1, .7 + Math.random() * .6);
     m.visible = !(k.inv > 0 && k.warped && Math.sin(this.time * 40) > .3);
+  }
+  // tyre marks and dust while the kart slides, smoke behind a boost
+  trail(k, rdt, lat, fwd){
+    if (rdt <= 0) return;
+    const sliding = (Math.abs(lat) > 4.5 && Math.abs(fwd) > 8) || k.spin > 0 || (k.drift && Math.abs(fwd) > 8);
+    const fx = Math.sin(k.h), fz = Math.cos(k.h), rx = -fz, rz = fx;
+    for (let s = 0; s < 2; s++){
+      const side = s ? 1.12 : -1.12, wx = k.x - fx * 1.2 + rx * side, wz = k.z - fz * 1.2 + rz * side, prev = k.skidAt[s];
+      if (!sliding || k.flip > 0){ k.skidAt[s] = null; continue; }
+      if (!prev){ k.skidAt[s] = { x:wx, z:wz }; continue; }
+      const dx = wx - prev.x, dz = wz - prev.z, d = Math.hypot(dx, dz);
+      if (d > .7){ if (d < 6) this.skids.add((wx + prev.x) / 2, k.ly, (wz + prev.z) / 2, Math.atan2(dx, dz), d + .1, .42); prev.x = wx; prev.z = wz; }
+    }
+    k.dustT -= rdt;
+    if (k.dustT <= 0 && (sliding || k.boost > 0)){
+      k.dustT = sliding ? .045 : .07;
+      const s = Math.random() < .5 ? -1 : 1, bx = k.x - fx * 1.6 + rx * s * 1.1, bz = k.z - fz * 1.6 + rz * s * 1.1;
+      this.parts.add(bx, k.ly + .4, bz, -k.vx * .15 + (Math.random() - .5) * 2, .8 + Math.random(), -k.vz * .15 + (Math.random() - .5) * 2,
+        .26 + Math.random() * .2, .6, sliding ? '#f3e6ff' : '#ffd9b0', 'dust');
+    }
   }
   // keep the pack together a little so everyone stays in the race
   rubber(k){
@@ -317,7 +365,7 @@ export class Race {
     for (let i = 0; i <= 10; i++){ pts.push(new THREE.Vector3(px, y + 40 - i * 4, pz)); px = x + (Math.random() - .5) * 3; pz = z + (Math.random() - .5) * 3; }
     pts[10].set(x, y + 1, z);
     const g = new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 30, .25, 5, false);
-    const m = new THREE.Mesh(g, basic('#fff36b')); this.root.add(m);
+    const m = new THREE.Mesh(g, emissive('#fff36b', 3.2)); this.root.add(m);
     this.fx.push({ mesh:m, life:.45, max:.45, kind:'bolt' });
   }
   shockwave(k){
@@ -327,7 +375,7 @@ export class Race {
   }
   ring(x, y, z){
     if (this.log) this.log.push(['r', +x.toFixed(1), +y.toFixed(1), +z.toFixed(1)]);
-    const ring = new THREE.Mesh(new THREE.TorusGeometry(1, .35, 8, 40).rotateX(Math.PI / 2), basic('#fff36b')); ring.position.set(x, y + .8, z); this.root.add(ring);
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(1, .35, 8, 40).rotateX(Math.PI / 2), emissive('#fff36b', 2.6)); ring.position.set(x, y + .8, z); this.root.add(ring);
     this.fx.push({ mesh:ring, life:.6, max:.6, kind:'ring', r:24 });
   }
   warp(k){
@@ -336,7 +384,7 @@ export class Race {
     const ni = t.wrap(k.idx + jump), p = t.pos(ni, 0);
     k.x = p.x; k.z = p.z; k.y = p.y; k.idx = ni; k.prog += jump; k.h = t.heading(ni);
     const sp = Math.max(k.speed, MAX_SPEED * .8); k.vx = Math.sin(k.h) * sp; k.vz = Math.cos(k.h) * sp;
-    k.inv = 1.2; k.warped = true; k.camPos.set(k.x - Math.sin(k.h) * 10, k.y + 4.5, k.z - Math.cos(k.h) * 10);
+    k.inv = 1.2; k.warped = true; k.snap = true; k.drift = 0; k.skidAt = [null, null];
     this.burst(k.x, k.y + 1, k.z, '#c58bff', 14, 10);
     this.snd('warp', k);
   }
@@ -347,7 +395,7 @@ export class Race {
     else { k.flip = 1.4; k.vx *= .3; k.vz *= .3; }
     k.inv = type === 'flip' ? 1.8 : 1.3; k.warped = false;
     // sparks fly off the kart
-    this.burst(k.x, k.y + 1.2, k.z, k.pl.color, 8, 12, 'brick');
+    this.burst(k.x, k.y + 1.2, k.z, k.pl.color, 10, 12, 'shard'); k.drift = 0; k.dch = 0;
     this.snd('spin', k); if (k.pl.kind !== 'ai') k.pl.notify({ e:'hit' });
   }
 
@@ -379,23 +427,26 @@ export class Race {
   /* ---------- effects: shards, puffs, rings and bolts ---------- */
   burst(x, y, z, color, n, speed, kind = 'shard'){
     if (this.log) this.log.push(['f', +x.toFixed(1), +y.toFixed(1), +z.toFixed(1), color, n, speed, kind]);
-    for (let i = 0; i < n; i++){
-      const m = new THREE.Mesh(kind === 'puff' ? Race.puffG : Race.shardG, kind === 'puff' ? mat('#ffffff', { roughness:1 }) : mat(color, { emissive:new THREE.Color(color), emissiveIntensity:.6 }));
-      m.position.set(x, y, z); const s = kind === 'puff' ? .5 + Math.random() * .5 : .6 + Math.random() * .5; m.scale.setScalar(s);
-      this.root.add(m);
-      const a = Math.random() * Math.PI * 2, up = kind === 'puff' ? 1 + Math.random() : 4 + Math.random() * 8;
-      this.fx.push({ mesh:m, kind, life:kind === 'puff' ? .5 : 1.1, max:kind === 'puff' ? .5 : 1.1, s,
-        v:new THREE.Vector3(Math.cos(a) * speed * Math.random(), up, Math.sin(a) * speed * Math.random()), r:new THREE.Vector3(Math.random() * 8, Math.random() * 8, 0) });
+    const P = this.parts;
+    if (kind === 'puff'){
+      for (let i = 0; i < n; i++){ const a = Math.random() * Math.PI * 2, v = speed * Math.random();
+        P.add(x, y, z, Math.cos(a) * v, 1 + Math.random(), Math.sin(a) * v, .2 + Math.random() * .16, .45, '#fff6f0', 'puff'); }
+      return;
     }
+    // a pop: coloured shards, a few sparks and a soft puff
+    for (let i = 0; i < n; i++){ const a = Math.random() * Math.PI * 2, v = speed * (.3 + Math.random() * .7);
+      P.add(x, y, z, Math.cos(a) * v, 5 + Math.random() * 8, Math.sin(a) * v, .22 + Math.random() * .18, 1 + Math.random() * .4, color, 'shard'); }
+    for (let i = 0; i < Math.ceil(n * .8); i++){ const a = Math.random() * Math.PI * 2, v = speed * (.8 + Math.random());
+      P.add(x, y, z, Math.cos(a) * v, 3 + Math.random() * 6, Math.sin(a) * v, .1 + Math.random() * .06, .45 + Math.random() * .25, color, 'spark'); }
+    for (let i = 0; i < Math.ceil(n / 3); i++) P.add(x + (Math.random() - .5) * 1.5, y, z + (Math.random() - .5) * 1.5, (Math.random() - .5) * 3, 1.5, (Math.random() - .5) * 3, .4 + Math.random() * .3, .55, '#fff4f0', 'puff');
   }
   updateFx(dt){
+    this.parts.update(dt); this.skids.update(dt);
     for (const f of [...this.fx]){
       f.life -= dt; const k = Math.max(0, f.life / f.max);
-      if (f.kind === 'shard' || f.kind === 'brick'){ f.v.y -= 30 * dt; f.mesh.position.addScaledVector(f.v, dt); f.mesh.rotation.x += f.r.x * dt; f.mesh.rotation.y += f.r.y * dt; f.mesh.scale.setScalar(f.s * Math.min(1, k * 3)); }
-      else if (f.kind === 'puff'){ f.mesh.position.addScaledVector(f.v, dt); f.mesh.scale.setScalar(f.s * (1 + (1 - k) * 1.5) * k); }
-      else if (f.kind === 'ring'){ const r = 1 + (1 - k) * f.r; f.mesh.scale.set(r, 1, r); }
+      if (f.kind === 'ring'){ const r = 1 + (1 - k) * f.r; f.mesh.scale.set(r, 1 + k, r); }
       else if (f.kind === 'bolt'){ f.mesh.visible = Math.sin(f.life * 80) > -.3; }
-      if (f.life <= 0){ this.root.remove(f.mesh); if (f.kind === 'bolt' || f.kind === 'ring') f.mesh.geometry.dispose(); this.fx.splice(this.fx.indexOf(f), 1); }
+      if (f.life <= 0){ this.root.remove(f.mesh); f.mesh.geometry.dispose(); this.fx.splice(this.fx.indexOf(f), 1); }
     }
   }
 
@@ -404,17 +455,44 @@ export class Race {
     order.forEach((k, i) => k.place = i + 1);
     this.order = order;
   }
+  /* ---------- cameras ----------
+     top  : a high telephoto view that swings slowly behind the kart and pulls back with speed
+     chase: low and close behind the kart */
   updateCam(k, dt){
-    const f = new THREE.Vector3(Math.sin(k.h), 0, Math.cos(k.h)), back = k.look > 0 ? -1 : 1;
-    const dist = 9.5 + Math.max(0, k.speed) * .05, wantP = new THREE.Vector3(k.x - f.x * dist * back, k.y + 4.2, k.z - f.z * dist * back);
-    const wantL = new THREE.Vector3(k.x + f.x * 6 * back, k.y + 1.4, k.z + f.z * 6 * back);
-    const a = 1 - Math.exp(-dt * (k.look > 0 ? 30 : 7));
-    k.camPos.lerp(wantP, a); k.camLook.lerp(wantL, 1 - Math.exp(-dt * 12));
+    const snap = k.snap; k.snap = false;
+    const cam = k.cam, aspect = cam.aspect || 1, back = k.look > 0;
+    const sp = Math.hypot(k.vx, k.vz), vh = sp > 6 ? Math.atan2(k.vx, k.vz) : k.h;
+    if (Race.camMode === 'top'){
+      // heading the camera swings towards: mostly the kart's, a little of where it is actually going
+      const want = (back ? k.h + Math.PI : k.h + wrapPi(vh - k.h) * .4);
+      k.camYaw += wrapPi(want - k.camYaw) * (snap ? 1 : 1 - Math.exp(-dt * (back ? 9 : 2.2)));
+      // further out with speed and boost, and in tall, narrow views so the road ahead stays in sight
+      const wantD = (44 + Math.max(0, k.speed) * .36 + (k.boost > 0 ? 6 : 0)) * (aspect < 1 ? Math.pow(1 / aspect, .45) : 1);
+      k.camDist += (wantD - k.camDist) * (snap ? 1 : 1 - Math.exp(-dt * 1.6));
+      // look ahead of the kart along its velocity
+      const ahead = clamp(sp * .32, 0, 14) * (back ? -1 : 1);
+      const fx = Math.sin(vh) * ahead, fz = Math.cos(vh) * ahead;
+      const ty = k.y + 1;
+      const fa = snap ? 1 : 1 - Math.exp(-dt * 6);
+      k.focus.x += (k.x + fx - k.focus.x) * fa; k.focus.z += (k.z + fz - k.focus.z) * fa; k.focus.y += (ty - k.focus.y) * (snap ? 1 : 1 - Math.exp(-dt * 4));
+      const el = .72, d = k.camDist, h = Math.cos(el) * d;
+      k.camPos.set(k.focus.x - Math.sin(k.camYaw) * h, k.focus.y + Math.sin(el) * d, k.focus.z - Math.cos(k.camYaw) * h);
+      cam.position.copy(k.camPos); cam.lookAt(k.focus);
+      const fov = 30 + (k.boost > 0 ? 3 : 0);
+      if (Math.abs(cam.fov - fov) > .02){ cam.fov += (fov - cam.fov) * Math.min(1, dt * 4); cam.updateProjectionMatrix(); }
+      return;
+    }
+    const f = new THREE.Vector3(Math.sin(k.h), 0, Math.cos(k.h)), s = back ? -1 : 1;
+    const dist = 10.5 + Math.max(0, k.speed) * .06, wantP = new THREE.Vector3(k.x - f.x * dist * s, k.y + 4.6, k.z - f.z * dist * s);
+    const wantL = new THREE.Vector3(k.x + f.x * 6 * s, k.y + 1.4, k.z + f.z * 6 * s);
+    if (snap){ k.camPos.copy(wantP); k.camLook.copy(wantL); }
+    k.camPos.lerp(wantP, 1 - Math.exp(-dt * (back ? 30 : 7))); k.camLook.lerp(wantL, 1 - Math.exp(-dt * 12));
     // never dip into the hillsides (the tunnel has its own roof)
     if (!this.track.inSlot(k.camPos.x, k.camPos.z)){ const g = this.track.height(k.camPos.x, k.camPos.z) + 1.5; if (k.camPos.y < g) k.camPos.y = g; }
-    k.cam.position.copy(k.camPos); k.cam.lookAt(k.camLook);
-    const fov = 68 + (k.boost > 0 ? 10 : 0) + Math.max(0, k.speed) * .1;
-    if (Math.abs(k.cam.fov - fov) > .05){ k.cam.fov += (fov - k.cam.fov) * Math.min(1, dt * 5); k.cam.updateProjectionMatrix(); }
+    k.focus.copy(k.camLook);
+    cam.position.copy(k.camPos); cam.lookAt(k.camLook);
+    const fov = 62 + (k.boost > 0 ? 10 : 0) + Math.max(0, k.speed) * .12;
+    if (Math.abs(cam.fov - fov) > .05){ cam.fov += (fov - cam.fov) * Math.min(1, dt * 5); cam.updateProjectionMatrix(); }
   }
   results(){
     return this.order.map(k => ({ name:k.pl.name, color:k.pl.color, kind:k.pl.kind, fin:k.fin, time:k.finT, place:k.place }));
@@ -501,19 +579,32 @@ export class Race {
     for (const k of this.karts) if (k.local) this.updateCam(k, dt);
   }
   static projMesh(kind){
-    const mesh = new THREE.Group();
-    if (kind === 'cannon'){ mesh.add(new THREE.Mesh(new THREE.SphereGeometry(.7, 14, 10), mat(COLORS.dark, { roughness:.3, metalness:.8 }))); }
-    else { mesh.add(new THREE.Mesh(new THREE.CylinderGeometry(.35, .35, 2, 10).rotateX(Math.PI / 2), mat(COLORS.steel, { roughness:.3, metalness:.7 })));
-      const nose = new THREE.Mesh(new THREE.ConeGeometry(.35, .7, 10).rotateX(Math.PI / 2), mat(COLORS.red, { emissive:new THREE.Color(COLORS.red), emissiveIntensity:.4 })); nose.position.z = 1.3; mesh.add(nose);
-      const fin = new THREE.Mesh(new THREE.BoxGeometry(1.2, .1, .5), mat(COLORS.red, { emissive:new THREE.Color(COLORS.red), emissiveIntensity:.4 })); fin.position.z = -.8; mesh.add(fin); }
+    const mesh = new THREE.Group(), G = Race.geo;
+    if (kind === 'cannon'){
+      mesh.add(new THREE.Mesh(G.ball, stylize(COLORS.dark)));
+      const band = new THREE.Mesh(G.band, emissive('#ff7b3a', 2.2)); band.rotation.x = Math.PI / 2; mesh.add(band);
+    } else {
+      mesh.add(new THREE.Mesh(G.tube, stylize(COLORS.steel)));
+      const nose = new THREE.Mesh(G.nose, stylize(COLORS.red)); nose.position.z = 1.3; mesh.add(nose);
+      const fin = new THREE.Mesh(G.fin, stylize(COLORS.red)); fin.position.z = -.8; mesh.add(fin);
+      const jet = new THREE.Mesh(G.jet, emissive('#ffb347', 3)); jet.position.z = -1.25; mesh.add(jet);
+    }
+    for (const c of mesh.children) c.castShadow = true;
     return mesh;
   }
   static hazardMesh(kind){
-    if (kind === 'oil'){ const m = new THREE.Mesh(new THREE.CircleGeometry(3, 20).rotateX(-Math.PI / 2), basic('#15121c')); m.scale.set(1, 1, .8); return m; }
-    const mesh = new THREE.Group(); mesh.add(new THREE.Mesh(new THREE.SphereGeometry(.8, 14, 8, 0, Math.PI * 2, 0, Math.PI / 2), mat(COLORS.dark, { roughness:.4, metalness:.6 })));
-    const l = new THREE.Mesh(new THREE.SphereGeometry(.25, 8, 6), basic(COLORS.red)); l.position.y = .75; mesh.add(l); mesh.userData.light = l;
+    const G = Race.geo;
+    if (kind === 'oil'){ const m = new THREE.Mesh(G.oil, stylize('#1d1426', { drop:false, core:false })); m.scale.set(1, 1, .8); return m; }
+    const mesh = new THREE.Group(), dome = new THREE.Mesh(G.mine, stylize(COLORS.dark)); dome.castShadow = true; mesh.add(dome);
+    const l = new THREE.Mesh(G.mineLight, emissive(COLORS.red, 3)); l.position.y = .75; mesh.add(l); mesh.userData.light = l;
     return mesh;
   }
 }
-Race.shardG = new THREE.TetrahedronGeometry(.55, 0);
-Race.puffG = new THREE.SphereGeometry(.8, 8, 6);
+Race.camMode = 'top';
+Race.geo = {
+  ball: new THREE.IcosahedronGeometry(.75, 2), band: new THREE.TorusGeometry(.76, .09, 6, 20),
+  tube: new THREE.CylinderGeometry(.35, .35, 2, 10).rotateX(Math.PI / 2), nose: new THREE.ConeGeometry(.35, .7, 10).rotateX(Math.PI / 2),
+  fin: new THREE.BoxGeometry(1.2, .1, .5), jet: new THREE.SphereGeometry(.3, 8, 6),
+  oil: new THREE.CircleGeometry(3, 24).rotateX(-Math.PI / 2), mine: new THREE.SphereGeometry(.8, 14, 8, 0, Math.PI * 2, 0, Math.PI / 2),
+  mineLight: new THREE.SphereGeometry(.25, 8, 6),
+};
