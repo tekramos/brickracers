@@ -470,7 +470,7 @@ function frame(dt){
   updateTod(dt);
   // keep the gantry lights in step with the race even if a count event was missed (joining devices)
   const lr = race || demo; if (lr) startLights(lr.state === 'countdown' ? (lightsN > 0 ? lightsN : -1) : 0);
-  if (!JOIN){ pads.tick(); readInputs(); feed(dt); } else readLocal();
+  if (!JOIN){ pads.tick(); readInputs(); feed(dt); } else { pads.tick(); readLocal(); joinFeed(dt); }
   if (JOIN) client && sendLocal(dt);
   else net.tick();
   if ((state === 'lobby' || JOIN && !race) && demo){
@@ -540,30 +540,86 @@ function setupJoin(){
     if (!n1){ $('#jname').focus(); return; }
     store.set('br-name', n1); Snd.init(); Snd.play('select');
     const names = [n1]; if ($('#jtwo').checked) names.push(n2 || 'Player 2');
-    locals.length = 0; names.forEach(n => locals.push({ name:n, input:{ steer:0, gas:0, brake:0 }, cnt:[0, 0, 0], gp:{} }));
+    locals.length = 0; names.forEach(n => locals.push({ name:n, input:{ steer:0, gas:0, brake:0 }, cnt:[0, 0, 0, 0], gp:{} }));
     client = new NetClient(JOIN, names);
     client.onStatus = joinStatus; client.onSnap = onSnap;
-    client.start(); $('#jform').classList.add('hidden'); $('#jwait').classList.remove('hidden'); joinStatus('connecting');
+    client.start(); joinStatus('connecting');
+    // from here the joining device shows the same lobby as the host, and can take phones of its own
+    $('#joinui').classList.add('hidden'); showJoinLobby();
   };
   $('#jform').addEventListener('keydown', e => { if (e.key === 'Enter') $('#jgo').click(); });
   $('#jstart').onclick = () => localPress(0, 1);
+  $('#start').onclick = () => localPress(0, 1);
+  $('#lleave').onclick = () => { if (client) client.leave(); location.href = location.pathname; };
   $('#again').onclick = () => localPress(0, 1);
   $('#tolobby').textContent = 'LEAVE'; $('#tolobby').onclick = () => { if (client) client.leave(); location.href = location.pathname; };
   $('#resume').onclick = () => localPress(0, 1); $('#quit').classList.add('hidden');
   if ('ontouchstart' in window) setupTouch();
   startDemo(); state = 'lobby'; Snd.music(true);
 }
+// the lobby on a joining device: the roster from the host, and a phone link for this device's own players
+function showJoinLobby(){
+  document.body.classList.add('joiner');
+  for (const id of ['#lstat', '#lleave']) $(id).classList.remove('hidden');
+  $('#lobby').classList.remove('hidden'); $('#start').disabled = false;
+  renderRoster([]);
+  pads.onJoin = joinPhone; pads.onLeave = p => { const l = locals.find(l => l.phone === p); if (l){ l.gone = true; l.input.steer = l.input.gas = l.input.brake = 0; } };
+  pads.onButton = (p, b) => { const i = locals.findIndex(l => l.phone === p); if (i < 0) return; const k = localKart(i);
+    if (b === 'look'){ if (k) k.look = 1.2; } else if (b === 'cam'){ if (k) camToast(k, race.nextCam(k)); } else localPress(i, b === 'fire' ? 0 : 1); };
+  pads.onStatus = (st, msg) => {
+    const el = $('#padst'); el.className = st === 'error' ? 'err' : st === 'waiting' ? 'ok' : '';
+    el.textContent = msg || { loading:'Setting up the phone link…', waiting:'Ready: scan the code to add your phone', error:'Phone link unavailable' }[st] || '';
+    $('#code').textContent = pads.code || '····';
+    const svg = pads.qrSvg(), q = $('#qr');
+    if (svg && q.dataset.u !== pads.url){ q.innerHTML = svg; q.dataset.u = pads.url; }
+    $('#padurl').textContent = pads.url ? pads.url.replace(/^https?:\/\//, '') : '';
+  };
+  pads.start();
+}
+const localKart = i => race && client && race.karts.find(k => k.local && k.pl.slot === client.slots[i]);
+// a phone connected to this device becomes one more player of this device in the online race
+function joinPhone(p){
+  if (locals.length >= 5) return false;
+  const l = { name:p.name, input:{ steer:0, gas:0, brake:0 }, cnt:[0, 0, 0, 0], gp:{}, phone:p };
+  locals.push(l); p.slot = locals.length - 1; client.setNames(locals.map(x => x.name));
+  pads.send({ t:'slot', i:p.slot, col:PLAYER_COLORS[p.slot], name:p.name }, p.key);
+  return true;
+}
+// what the phones on this device show: place, lap and power-up of their kart
+let joinFeedT = 0;
+function joinFeed(dt){
+  joinFeedT -= dt; if (joinFeedT > 0) return; joinFeedT = .2;
+  locals.forEach((l, i) => { if (!l.phone || l.gone) return;
+    const k = localKart(i);
+    if (!k || !race) return pads.send({ t:'st', state:'lobby' }, l.phone.key);
+    const st = state === 'pause' ? 'pause' : state === 'results' ? 'results' : race.state === 'countdown' ? 'countdown' : 'race';
+    pads.send({ t:'st', state:st, pos:k.place, lap:Math.max(1, k.lapDone + 1), laps:race.laps, pu:k.pu, w:k.w, fin:k.fin }, l.phone.key);
+  });
+}
+function renderRoster(roster){
+  const el = $('#slots'); el.innerHTML = '';
+  for (let i = 0; i < 5; i++){
+    const r = (roster || []).find(r => r[0] === i), d = document.createElement('div'); d.className = 'slot' + (r ? ' on' : ''); d.dataset.n = String(i + 1).padStart(2, '0'); d.style.setProperty('--c', PLAYER_COLORS[i]);
+    const bk = document.createElement('div'); bk.className = 'bk'; d.append(bk);
+    const nm = document.createElement('div'); nm.className = 'nm'; nm.textContent = r ? r[1] : 'P' + (i + 1); d.append(nm);
+    const how = document.createElement('div'); how.className = 'how';
+    how.textContent = !r ? 'open' : (client.slots.includes(i) ? 'you · ' : '') + r[3]; d.append(how);
+    el.append(d);
+  }
+}
 function joinStatus(st){
   const msg = { connecting:'Connecting to race ' + JOIN + '…', joined:'You are in! Waiting for the host to start the race.', full:'This race is full (5 players).',
     removed:'The host removed you from the race.', lost:'Lost the host. Reconnecting…', error:'Could not reach the internet.' }[st] || st;
-  $('#jst').textContent = msg + (client && client.slots.length ? (client.direct ? '  (direct link' : '  (relay') + (client.ping ? ', ' + client.ping + ' ms)' : ')') : '');
+  const txt = msg + (client && client.slots.length ? (client.direct ? '  (direct link' : '  (relay') + (client.ping ? ', ' + client.ping + ' ms)' : ')') : '');
+  $('#jst').textContent = txt; $('#lstat').textContent = txt;
 }
 function localPress(i, b){ const p = locals[i]; if (!p) return; p.cnt[b]++; sendT = 0; lastSentJ = ''; }
 // joining device controls: keyboard (arrows or WASD), gamepads and touch buttons
 function readLocal(){
   const pads2 = navigator.getGamepads ? [...navigator.getGamepads()].filter(Boolean) : [];
   locals.forEach((p, i) => {
-    const kbs = locals.length > 1 ? [KB[i]] : KB, inp = p.input;
+    if (p.phone){ if (!p.gone){ p.input.steer = p.phone.steer; p.input.gas = p.phone.gas ? 1 : 0; p.input.brake = p.phone.brake ? 1 : 0; } return; }
+    const kbs = locals.filter(l => !l.phone).length > 1 ? [KB[i]] : KB, inp = p.input;
     let steer = 0, gas = 0, brake = 0;
     for (const m of kbs){ steer += (down(m.r) ? 1 : 0) - (down(m.l) ? 1 : 0); gas = gas || down(m.g); brake = brake || down(m.b); }
     const g = PADMAP(pads2[i]);
@@ -583,12 +639,9 @@ function sendLocal(dt){
 }
 function onSnap(s){
   if (!client.slots.length) return;
-  $('#jroster').innerHTML = '';
-  for (const [i, n, c, kind] of s.roster || []){
-    const d = document.createElement('div'); d.style.setProperty('--c', c); const b = document.createElement('i'); d.append(b, n + (client.slots.includes(i) ? ' (you)' : '') + ' · ' + kind); $('#jroster').append(d);
-  }
+  renderRoster(s.roster);
   if (s.st === 'lobby' || !s.k){
-    if (race){ race.dispose(); race = null; ['#hud', '#timer', '#results', '#pause', '#touch'].forEach(x => $(x).classList.add('hidden')); $('#joinui').classList.remove('hidden'); startDemo(); }
+    if (race){ race.dispose(); race = null; ['#hud', '#timer', '#results', '#pause', '#touch'].forEach(x => $(x).classList.add('hidden')); $('#lobby').classList.remove('hidden'); startDemo(); }
     lastEv = Math.max(lastEv, ...(s.ev || []).map(e => e[0]), 0); joinStatus(client.status); return;
   }
   // a new race: build the same grid as the host
@@ -601,7 +654,7 @@ function onSnap(s){
     });
     race = new Race(scene, track, players, s.laps); race.client = true;
     for (const k of race.karts){ k.local = client.slots.includes(k.pl.slot); if (k.ai) k.ai = null; }
-    $('#joinui').classList.add('hidden'); $('#hud').classList.remove('hidden'); $('#timer').classList.remove('hidden');
+    $('#joinui').classList.add('hidden'); $('#lobby').classList.add('hidden'); $('#hud').classList.remove('hidden'); $('#timer').classList.remove('hidden');
     buildHud(); state = 'race';
   }
   race.applySnap(s, Math.min(.2, (client.ping || 60) / 2000 + .02));

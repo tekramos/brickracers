@@ -15,10 +15,11 @@ import { PAD_CDN, PAD_BROKERS } from './padhost.js';
 const TOPIC = 'tekracers/v1/';
 const ICE = [{ urls:['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }, { urls:'stun:stun.cloudflare.com:3478' }];
 const BUTTONS = ['fire', 'start', 'look', 'cam'];
-const loadJs = src => new Promise((ok, bad) => {
-  if ([...document.scripts].some(s => s.src === src)) return ok();
-  const s = document.createElement('script'); s.src = src; s.onload = ok; s.onerror = () => bad(new Error('Could not load ' + src)); document.head.appendChild(s);
-});
+// one promise per script, shared by the phone link and the online link, so the second caller waits for the load
+const loadJs = src => (window.__jsLoads = window.__jsLoads || {})[src] || (window.__jsLoads[src] = new Promise((ok, bad) => {
+  if (src.includes('mqtt') && window.mqtt || src.includes('qrcode') && window.qrcode) return ok();
+  const s = document.createElement('script'); s.src = src; s.onload = ok; s.onerror = () => { delete window.__jsLoads[src]; bad(new Error('Could not load ' + src)); }; document.head.appendChild(s);
+}));
 const gathered = pc => new Promise(ok => { if (pc.iceGatheringState === 'complete') return ok(); const t = setTimeout(ok, 2500); pc.addEventListener('icegatheringstatechange', () => { if (pc.iceGatheringState === 'complete'){ clearTimeout(t); ok(); } }); });
 
 /* ---------- host side ---------- */
@@ -79,7 +80,7 @@ export class NetHost {
     if (!d){
       // a device we do not know (the host reloaded): ask it to say hello again
       if (m.t !== 'hello' && m.t !== 'in'){ if (m.t !== 'bye') this.relay({ t:'who', to:m.k }); return; }
-      const names = (Array.isArray(m.n) ? m.n : ['Racer']).slice(0, 2).map(n => String(n || 'Racer').trim().slice(0, 12) || 'Racer');
+      const names = (Array.isArray(m.n) ? m.n : ['Racer']).slice(0, 5).map(n => String(n || 'Racer').trim().slice(0, 12) || 'Racer');
       d = { key:m.k, names, players:names.map(() => ({ steer:0, gas:0, brake:0, cnt:null })), pc:null, dc:null, direct:false, last:performance.now(), seq:0, epoch:null, slots:[] };
       // the game gives the device a slot per player (fewer if the race is nearly full)
       d.slots = this.onJoin(d);
@@ -88,7 +89,15 @@ export class NetHost {
       this.send({ t:'joined', slots:d.slots }, m.k);
     }
     d.last = performance.now();
-    if (m.t === 'hello'){ this.send({ t:'joined', slots:d.slots }, m.k); return; }
+    if (m.t === 'hello'){
+      // a device can add players later (phones connected to it): give the new ones slots
+      if (Array.isArray(m.n) && m.n.length > d.names.length){
+        d.names = m.n.slice(0, 5).map(n => String(n || 'Racer').trim().slice(0, 12) || 'Racer');
+        while (d.players.length < d.names.length) d.players.push({ steer:0, gas:0, brake:0, cnt:null });
+        d.slots = this.onJoin(d); this.onChange();
+      }
+      this.send({ t:'joined', slots:d.slots }, m.k); return;
+    }
     if (m.t === 'offer'){ this.onOffer(d, m); return; }
     if (m.t === 'ping'){ this.send({ t:'pong', ts:m.ts }, m.k); return; }
     if (m.t === 'bye'){ this.drop(m.k); return; }
@@ -147,6 +156,8 @@ export class NetClient {
   }
   setStatus(s){ this.status = s; this.onStatus(s); }
   hello(){ this.relaySend({ t:'hello', n:this.names }); }
+  // the device now has more players (a phone joined it)
+  setNames(names){ this.names = names; this.hello(); }
   relaySend(o){ o.k = this.key; if (this.mq && this.mq.connected) this.mq.publish(TOPIC + this.code + '/net/up', JSON.stringify(o), { qos:0 }); }
   send(o){
     o.k = this.key;

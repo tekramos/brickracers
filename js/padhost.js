@@ -23,10 +23,11 @@ const PAD_ICE = [{ urls:['stun:stun.l.google.com:19302', 'stun:stun1.l.google.co
 const PAD_HOME = () => window.PAD_HOME || (/^https?:$/.test(location.protocol) ? location.href : '');
 const BUTTONS = ['fire', 'start', 'look', 'cam'];
 
-const loadJs = src => new Promise((ok, bad) => {
-  if ([...document.scripts].some(s => s.src === src)) return ok();
-  const s = document.createElement('script'); s.src = src; s.onload = ok; s.onerror = () => bad(new Error('Could not load ' + src)); document.head.appendChild(s);
-});
+// one promise per script, shared by the phone link and the online link, so the second caller waits for the load
+const loadJs = src => (window.__jsLoads = window.__jsLoads || {})[src] || (window.__jsLoads[src] = new Promise((ok, bad) => {
+  if (src.includes('mqtt') && window.mqtt || src.includes('qrcode') && window.qrcode) return ok();
+  const s = document.createElement('script'); s.src = src; s.onload = ok; s.onerror = () => { delete window.__jsLoads[src]; bad(new Error('Could not load ' + src)); }; document.head.appendChild(s);
+}));
 
 export class PadHost {
   constructor(){

@@ -69,6 +69,9 @@ Each player can also race from their own device, in the same race:
 - The host's browser runs the race (it is the server) and streams it to each device about 20 times a second;
   each device moves its own kart straight away and is gently corrected by the host, so steering feels instant.
 - Controls on a joining device: arrows (or WASD) + Space + Shift, a gamepad, or the on-screen buttons on a phone or tablet.
+- After typing a name, a joining device lands in the same **lobby** as the host: the roster of all players, and its own
+  QR code so phones can join that device. Phones added there become more players of that device (up to 5 in all) and
+  appear in everyone's lobby.
 - Anyone can press START. Same-screen players (phones, keyboards), online players and AI racers can all mix in one race.
 - If nobody plays on the host screen, it follows the race leader with the standings, like a TV.
 
