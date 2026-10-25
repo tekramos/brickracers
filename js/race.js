@@ -50,7 +50,7 @@ export class Race {
     const k = { pl, mesh, x:p.x, z:p.z, y:p.y, h:t.heading(idx), vx:0, vz:0, idx, prog: -(t.wrap(START - idx)), lapDone:0,
       place:i + 1, fin:false, finT:0, pu:null, w:0, spin:0, flip:0, boost:0, shield:0, shieldLvl:0, inv:0, wrongT:0, wrong:false,
       wheel:0, steer:0, look:0, speed:0, bumpT:0, drift:0, dch:0, roll:0, pitch:0, susp:0, suspV:0, lastF:0, skidAt:[null, null], dustT:0,
-      cam: new THREE.PerspectiveCamera(30, 1, 1, 1600), camPos:new THREE.Vector3(), camLook:new THREE.Vector3(), camYaw:0, camDist:60, focus:new THREE.Vector3(), snap:true,
+      cam: new THREE.PerspectiveCamera(30, 1, 1, 1600), camPos:new THREE.Vector3(), camLook:new THREE.Vector3(), camMode:Race.defaultCam, camYaw:0, camDist:60, focus:new THREE.Vector3(), snap:true,
       ai: pl.kind === 'ai' ? { lane:(Math.random() - .5) * 8, laneT:0, skill:.9 + Math.random() * .07, hold:0 } : null };
     k.camYaw = k.h; k.focus.set(k.x, k.y, k.z);
     return k;
@@ -462,7 +462,7 @@ export class Race {
     const snap = k.snap; k.snap = false;
     const cam = k.cam, aspect = cam.aspect || 1, back = k.look > 0;
     const sp = Math.hypot(k.vx, k.vz), vh = sp > 6 ? Math.atan2(k.vx, k.vz) : k.h;
-    if (Race.camMode === 'top'){
+    if (k.camMode === 'top'){
       // heading the camera swings towards: mostly the kart's, a little of where it is actually going
       const want = (back ? k.h + Math.PI : k.h + wrapPi(vh - k.h) * .4);
       k.camYaw += wrapPi(want - k.camYaw) * (snap ? 1 : 1 - Math.exp(-dt * (back ? 9 : 2.2)));
@@ -482,18 +482,20 @@ export class Race {
       if (Math.abs(cam.fov - fov) > .02){ cam.fov += (fov - cam.fov) * Math.min(1, dt * 4); cam.updateProjectionMatrix(); }
       return;
     }
-    const f = new THREE.Vector3(Math.sin(k.h), 0, Math.cos(k.h)), s = back ? -1 : 1;
-    const dist = 10.5 + Math.max(0, k.speed) * .06, wantP = new THREE.Vector3(k.x - f.x * dist * s, k.y + 4.6, k.z - f.z * dist * s);
-    const wantL = new THREE.Vector3(k.x + f.x * 6 * s, k.y + 1.4, k.z + f.z * 6 * s);
+    const hi = k.camMode === 'high', f = new THREE.Vector3(Math.sin(k.h), 0, Math.cos(k.h)), s = back ? -1 : 1;
+    const dist = (hi ? 17 : 10.5) + Math.max(0, k.speed) * (hi ? .1 : .06), wantP = new THREE.Vector3(k.x - f.x * dist * s, k.y + (hi ? 10 : 4.6), k.z - f.z * dist * s);
+    const wantL = new THREE.Vector3(k.x + f.x * (hi ? 9 : 6) * s, k.y + 1.4, k.z + f.z * (hi ? 9 : 6) * s);
     if (snap){ k.camPos.copy(wantP); k.camLook.copy(wantL); }
     k.camPos.lerp(wantP, 1 - Math.exp(-dt * (back ? 30 : 7))); k.camLook.lerp(wantL, 1 - Math.exp(-dt * 12));
     // never dip into the hillsides (the tunnel has its own roof)
     if (!this.track.inSlot(k.camPos.x, k.camPos.z)){ const g = this.track.height(k.camPos.x, k.camPos.z) + 1.5; if (k.camPos.y < g) k.camPos.y = g; }
     k.focus.copy(k.camLook);
     cam.position.copy(k.camPos); cam.lookAt(k.camLook);
-    const fov = 62 + (k.boost > 0 ? 10 : 0) + Math.max(0, k.speed) * .12;
+    const fov = (hi ? 52 : 62) + (k.boost > 0 ? 10 : 0) + Math.max(0, k.speed) * .12;
     if (Math.abs(cam.fov - fov) > .05){ cam.fov += (fov - cam.fov) * Math.min(1, dt * 5); cam.updateProjectionMatrix(); }
   }
+  // switch a player's camera to the next view
+  nextCam(k){ const c = Race.CAMS; k.camMode = c[(c.indexOf(k.camMode) + 1) % c.length]; k.snap = true; k.cam.fov = k.camMode === 'top' ? 30 : k.camMode === 'high' ? 52 : 62; k.cam.updateProjectionMatrix(); return k.camMode; }
   results(){
     return this.order.map(k => ({ name:k.pl.name, color:k.pl.color, kind:k.pl.kind, fin:k.fin, time:k.finT, place:k.place }));
   }
@@ -600,7 +602,9 @@ export class Race {
     return mesh;
   }
 }
-Race.camMode = 'top';
+// camera views a player can cycle through while racing
+Race.CAMS = ['chase', 'high', 'top'];
+Race.defaultCam = 'chase';
 Race.geo = {
   ball: new THREE.IcosahedronGeometry(.75, 2), band: new THREE.TorusGeometry(.76, .09, 6, 20),
   tube: new THREE.CylinderGeometry(.35, .35, 2, 10).rotateX(Math.PI / 2), nose: new THREE.ConeGeometry(.35, .7, 10).rotateX(Math.PI / 2),

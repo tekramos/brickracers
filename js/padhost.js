@@ -21,7 +21,7 @@ const PAD_ICE = [{ urls:['stun:stun.l.google.com:19302', 'stun:stun1.l.google.co
 // where phones load pad.html from: next to this page when the game is served over http(s),
 // otherwise (opened from a file) set window.PAD_HOME to the deployed address
 const PAD_HOME = () => window.PAD_HOME || (/^https?:$/.test(location.protocol) ? location.href : '');
-const BUTTONS = ['fire', 'start', 'look'];
+const BUTTONS = ['fire', 'start', 'look', 'cam'];
 
 const loadJs = src => new Promise((ok, bad) => {
   if ([...document.scripts].some(s => s.src === src)) return ok();

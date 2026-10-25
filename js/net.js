@@ -14,7 +14,7 @@ import { PAD_CDN, PAD_BROKERS } from './padhost.js';
 
 const TOPIC = 'tekracers/v1/';
 const ICE = [{ urls:['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }, { urls:'stun:stun.cloudflare.com:3478' }];
-const BUTTONS = ['fire', 'start', 'look'];
+const BUTTONS = ['fire', 'start', 'look', 'cam'];
 const loadJs = src => new Promise((ok, bad) => {
   if ([...document.scripts].some(s => s.src === src)) return ok();
   const s = document.createElement('script'); s.src = src; s.onload = ok; s.onerror = () => bad(new Error('Could not load ' + src)); document.head.appendChild(s);

@@ -22,10 +22,10 @@ const QS = new URLSearchParams(location.search);
 const opts = {
   laps: Math.max(1, Math.min(9, +store.get('br-laps') || 3)), ai: store.get('br-ai') !== '0',
   q: QS.get('q') || store.get('br-q') || (/Mobi|Android|iPhone|iPad/i.test(navigator.userAgent) ? 'low' : 'high'), rend: QS.has('webgl') ? 'webgl' : store.get('br-rend') || 'auto',
-  cam: QS.get('cam') || store.get('br-cam') || 'top', tod: QS.get('tod') || store.get('br-tod') || 'dusk',
+  cam: QS.get('cam') || store.get('br-cam') || 'chase', tod: QS.get('tod') || store.get('br-tod') || 'dusk',
 };
 const TODS = ['day', 'dusk', 'night', 'dawn', 'cycle'], TOD_NAMES = { day:'Day', dusk:'Sunset', night:'Night', dawn:'Dawn', cycle:'Cycle' };
-Race.camMode = opts.cam === 'chase' ? 'chase' : 'top';
+Race.defaultCam = Race.CAMS.includes(opts.cam) ? opts.cam : 'chase';
 const ord = n => n + (['th', 'st', 'nd', 'rd'][(n % 100 - 20) % 10] || ['th', 'st', 'nd', 'rd'][n % 100] || 'th');
 const ordHtml = n => n + '<sup>' + (['th', 'st', 'nd', 'rd'][(n % 100 - 20) % 10] || ['th', 'st', 'nd', 'rd'][n % 100] || 'th') + '</sup>';
 const JOIN = (QS.get('join') || '').toUpperCase().replace(/[^A-Z]/g, '').slice(0, 4); // set on a joining device
@@ -165,13 +165,14 @@ function button(s, b){
   const k = kartOf(s);
   if (b === 'fire' && state === 'race' && k) race.use(k);
   if (b === 'look' && k) k.look = 1.2;
+  if (b === 'cam' && k) camToast(k, race.nextCam(k));
   if (b === 'start'){ if (state === 'lobby' || state === 'results') startRace(); else if (state === 'pause') resume(); }
 }
 
 /* ---------- keyboard ---------- */
 const KB = [
-  { l:['ArrowLeft'], r:['ArrowRight'], g:['ArrowUp'], b:['ArrowDown'], f:['Space'], look:['ShiftLeft', 'ShiftRight'] },
-  { l:['KeyA'], r:['KeyD'], g:['KeyW'], b:['KeyS'], f:['KeyF'], look:['KeyR'] },
+  { l:['ArrowLeft'], r:['ArrowRight'], g:['ArrowUp'], b:['ArrowDown'], f:['Space'], look:['ShiftLeft', 'ShiftRight'], cam:['KeyC'] },
+  { l:['KeyA'], r:['KeyD'], g:['KeyW'], b:['KeyS'], f:['KeyF'], look:['KeyR'], cam:['KeyV'] },
 ];
 function setupInput(){
   addEventListener('keydown', e => {
@@ -188,7 +189,11 @@ function setupInput(){
       if (e.code === 'Escape' || e.code === 'KeyP'){ if (state === 'race') pause(); else if (state === 'pause') resume(); }
     }
     if (e.code === 'KeyM'){ Snd.toggleMusic(); renderOpts(); }
-    if (e.code === 'KeyC'){ opts.cam = opts.cam === 'top' ? 'chase' : 'top'; Race.camMode = opts.cam; store.set('br-cam', opts.cam); snapCams(); if (!JOIN) renderOpts(); }
+    // each player switches their own camera: C (arrows player) and V (WASD player)
+    if (e.code === 'KeyC' || e.code === 'KeyV'){
+      if (JOIN){ const i = e.code === 'KeyV' && locals.length > 1 ? 1 : 0, k = race && race.karts.find(k => k.local && k.pl.slot === client.slots[i]); if (k) camToast(k, race.nextCam(k)); }
+      else for (const s of slots) if (s && s.kind === 'kb' && KB[s.kb].cam.includes(e.code)) button(s, 'cam');
+    }
   });
   addEventListener('keyup', e => keys.delete(e.code));
   addEventListener('blur', () => keys.clear());
@@ -222,7 +227,7 @@ function setupLobby(){
     if (o === 'laps+') opts.laps = Math.min(9, opts.laps + 1);
     if (o === 'ai') opts.ai = !opts.ai;
     if (o === 'q'){ opts.q = opts.q === 'high' ? 'low' : 'high'; store.set('br-q', opts.q); location.reload(); return; }
-    if (o === 'cam'){ opts.cam = opts.cam === 'top' ? 'chase' : 'top'; Race.camMode = opts.cam; snapCams(); }
+    if (o === 'cam'){ opts.cam = Race.CAMS[(Race.CAMS.indexOf(opts.cam) + 1) % Race.CAMS.length]; Race.defaultCam = opts.cam; }
     if (o === 'tod'){ opts.tod = TODS[(TODS.indexOf(opts.tod) + 1) % TODS.length]; if (opts.tod !== 'cycle') setPreset(opts.tod); else todT = 0; }
     if (o === 'rend'){ opts.rend = opts.rend === 'webgl' ? 'auto' : 'webgl'; store.set('br-rend', opts.rend); location.reload(); return; }
     if (o === 'mus') Snd.toggleMusic();
@@ -235,9 +240,13 @@ function setupLobby(){
 function renderOpts(){
   $('#olaps').textContent = opts.laps; $('#oai').textContent = opts.ai ? 'On' : 'Off'; $('#oq').textContent = opts.q === 'high' ? 'High' : 'Low';
   $('#omus').textContent = Snd.musicOn ? 'On' : 'Off'; $('#osnd').textContent = Snd.soundOn ? 'On' : 'Off';
-  $('#ocam').textContent = opts.cam === 'top' ? 'Top' : 'Chase'; $('#otod').textContent = TOD_NAMES[opts.tod] || 'Sunset';
+  $('#ocam').textContent = { chase:'Chase', high:'High', top:'Top' }[opts.cam] || 'Chase'; $('#otod').textContent = TOD_NAMES[opts.tod] || 'Sunset';
 }
-function snapCams(){ for (const r of [race, demo]) if (r) for (const k of r.karts){ k.snap = true; k.cam.fov = Race.camMode === 'top' ? 30 : 62; k.cam.updateProjectionMatrix(); }
+// a short label in the player's view when they change camera
+function camToast(k, mode){
+  store.set('br-cam', mode); opts.cam = Race.defaultCam = mode;
+  const h = hud.find(h => h.k === k); if (!h) return;
+  const t = h.cam; t.textContent = { chase:'Chase view', high:'High view', top:'Top view' }[mode]; t.style.transition = 'none'; t.style.opacity = 1; void t.offsetWidth; t.style.transition = 'opacity 1.4s .5s'; t.style.opacity = 0;
 }
 function renderSlots(){
   const el = $('#slots'); el.innerHTML = '';
@@ -350,9 +359,9 @@ function buildHud(){
   humans.forEach((k, i) => {
     const [x, y, w, h] = L.views[i], v = document.createElement('div'); v.className = 'view';
     Object.assign(v.style, { left:x * 100 + '%', top:y * 100 + '%', width:w * 100 + '%', height:h * 100 + '%' });
-    v.innerHTML = `<div class="flash"></div><div class="pos"></div><div class="lap"></div><div class="tag"><i></i><span></span></div><div class="pu"><div class="bk"></div><div class="pips"><i></i><i></i><i></i></div><span></span></div><div class="wrong hidden">WRONG WAY!</div><div class="done hidden"></div>`;
+    v.innerHTML = `<div class="flash"></div><div class="pos"></div><div class="lap"></div><div class="tag"><i></i><span></span></div><div class="pu"><div class="bk"></div><div class="pips"><i></i><i></i><i></i></div><span></span></div><div class="camt"></div><div class="wrong hidden">WRONG WAY!</div><div class="done hidden"></div>`;
     v.style.setProperty('--c', k.pl.color); v.querySelector('.tag span').textContent = k.pl.name;
-    el.append(v); hud.push({ k, v, pos:v.querySelector('.pos'), lap:v.querySelector('.lap'), pu:v.querySelector('.pu'), wrong:v.querySelector('.wrong'), done:v.querySelector('.done'), flash:v.querySelector('.flash'), cache:{} });
+    el.append(v); hud.push({ k, v, pos:v.querySelector('.pos'), lap:v.querySelector('.lap'), pu:v.querySelector('.pu'), wrong:v.querySelector('.wrong'), done:v.querySelector('.done'), flash:v.querySelector('.flash'), cam:v.querySelector('.camt'), cache:{} });
   });
   mini = document.createElement('canvas'); mini.id = 'mini'; el.append(mini);
   standings = null;
@@ -456,7 +465,7 @@ const view = (cam, x, y, w, h, full) => {
   renderer.setViewport(px, py, pw, ph); renderer.setScissor(px, py, pw, ph);
   renderer.render(scene, cam);
 };
-const kartView = k => { prepView(k.cam, k.focus, kpos.set(k.x, k.y, k.z), Race.camMode); return k.cam; };
+const kartView = k => { prepView(k.cam, k.focus, kpos.set(k.x, k.y, k.z), k.camMode === 'top' ? 'top' : 'chase'); return k.cam; };
 function frame(dt){
   updateTod(dt);
   // keep the gantry lights in step with the race even if a count event was missed (joining devices)
@@ -622,6 +631,7 @@ function setupTouch(){
   hold('#tl', v => touch.steer = v ? -1 : 0); hold('#tr', v => touch.steer = v ? 1 : 0);
   hold('#tgas', v => touch.gas = v); hold('#tbrake', v => touch.brake = v);
   hold('#tfire', v => { if (v) localPress(0, 0); });
+  hold('#tcam', v => { if (v){ const k = race && race.karts.find(k => k.local && k.pl.slot === client.slots[0]); if (k) camToast(k, race.nextCam(k)); } });
 }
 
 boot().catch(e => { console.error(e); const el = $('#loading .err'); if (el) el.textContent = 'Could not start the 3D renderer: ' + (e && e.message || e) + '. Try another browser, or add ?webgl to the address.'; });

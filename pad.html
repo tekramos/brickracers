@@ -81,7 +81,7 @@ body{background:
 </style>
 </head>
 <body>
-<div id="top"><div id="me"><span class="dot"></span><span class="nm">Racer</span></div><div class="st">Connecting…</div><div id="race"></div><button class="tb off" id="bLook">LOOK BACK</button></div>
+<div id="top"><div id="me"><span class="dot"></span><span class="nm">Racer</span></div><div class="st">Connecting…</div><div id="race"></div><button class="tb off" id="bCam">CAMERA</button><button class="tb off" id="bLook">LOOK BACK</button></div>
 <div id="pad">
   <div class="half" id="L"><div class="rail idle"><div class="knob"></div></div><button class="tb off" id="tilt">TILT: OFF</button><div class="lbl">slide to steer</div></div>
   <div class="half" id="R"></div>
@@ -105,7 +105,7 @@ body{background:
 'use strict';
 const $ = s => document.querySelector(s);
 const st = $('#top .st');
-const counts = [0, 0, 0]; // fire, start, look presses
+const counts = [0, 0, 0, 0]; // fire, start, look, camera presses
 const store = { get(k){ try { return localStorage.getItem(k); } catch (e) { return null; } }, set(k, v){ try { localStorage.setItem(k, v); } catch (e) {} } };
 const sess = { get(k){ try { return sessionStorage.getItem(k); } catch (e) { return null; } }, set(k, v){ try { sessionStorage.setItem(k, v); } catch (e) {} } };
 let code = (location.hash.slice(1) || '').toUpperCase().replace(/[^A-Z]/g, '').slice(0, 4), name = store.get('br-name') || '', gameState = 'lobby';
@@ -160,7 +160,7 @@ function tap(id, i){
   b.addEventListener('touchend', () => b.classList.remove('on'));
   b.addEventListener('click', () => { counts[i]++; push(true); }); // desktop testing
 }
-tap('#bFire', 0); tap('#bStart', 1); tap('#bLook', 2);
+tap('#bFire', 0); tap('#bStart', 1); tap('#bLook', 2); tap('#bCam', 3);
 
 /* ---------- sending: the moment the input changes (at most every 12ms), plus a 200ms heartbeat ---------- */
 let seq = 0, lastSent = '', lastT = 0, kickT = 0;

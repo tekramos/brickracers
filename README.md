@@ -31,8 +31,9 @@ bridge over the river, sweeping bends past the pond and the blossom groves, and 
 
 - Hold **brake while steering** at speed to drift. Hold the drift: the sparks turn blue, then orange, and letting go
   fires a mini turbo.
-- The **camera** (lobby option, or the C key) is either *Top*, a high view that swings behind your kart and pulls
-  back with speed, or *Chase*, low behind the kart.
+- Each player changes their own **camera** at any time (phone **CAMERA** button, or C for the arrows player and V for the
+  WASD player): *Chase* (low behind the kart, the default), *High* (further back and higher) or *Top* (a high view that
+  swings behind the kart and pulls back with speed). The lobby option sets the starting view.
 
 ## Play
 
@@ -56,7 +57,7 @@ The spare cell (3 or 5 players) shows the whole circuit from above with the stan
 ### Keyboard (for testing or a couch player)
 - Player 1: arrows, Space = fire, Shift = look back
 - Player 2: WASD, F = fire, R = look back
-- Enter = start, Esc / P = pause, C = camera, M = music
+- Enter = start, Esc / P = pause, C / V = change camera, M = music
 
 ## Online: friends at home
 
@@ -111,7 +112,7 @@ Same technology as SpaceGeo, extended to many phones (`js/padhost.js`, `pad.html
 - `sw.js`, `manifest.webmanifest`, `pad.webmanifest` – installable app / offline cache
 
 Add `?webgl` to the address to force the WebGL 2 renderer, `?q=low` for low graphics (the default on phones and tablets),
-`?tod=night` (day, dusk, night, dawn, cycle) for the time of day and `?cam=chase` for the chase camera.
+`?tod=night` (day, dusk, night, dawn, cycle) for the time of day and `?cam=high` or `?cam=top` for another starting camera.
 
 ## Credits
 

@@ -102,6 +102,7 @@ button{font-family:var(--body);cursor:pointer}
 #touch .tb{position:absolute;bottom:max(14px,env(safe-area-inset-bottom));pointer-events:auto;display:flex;align-items:center;justify-content:center;font:700 26px var(--disp);letter-spacing:.06em;color:var(--cream);background:rgba(36,18,47,.5);
   border-radius:50%;box-shadow:inset 0 0 0 2.5px rgba(255,244,230,.45);-webkit-user-select:none;user-select:none;touch-action:none;backdrop-filter:blur(4px)}
 #touch .tb.on{background:rgba(255,244,230,.3)}
+#tcam{right:14px;bottom:222px!important;width:64px;height:40px;border-radius:999px!important;font-size:22px!important}
 #tl{left:14px;width:84px;height:84px}#tr{left:110px;width:84px;height:84px}
 #tgas{right:14px;width:110px;height:110px;background:rgba(94,224,138,.45)!important}#tbrake{right:136px;width:76px;height:76px}#tfire{right:14px;bottom:140px!important;width:110px;height:64px;border-radius:999px!important;background:rgba(255,143,208,.45)!important}
 /* race HUD: one box per split-screen view */
@@ -117,6 +118,7 @@ button{font-family:var(--body);cursor:pointer}
 .view .pu .bk{width:22px;height:28px;background:var(--bc,#666);clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%)}
 .view .pu .pips{display:flex;gap:4px}.view .pu .pips i{width:9px;height:9px;border-radius:50%;background:rgba(255,244,230,.2)}.view .pu .pips i.on{background:var(--cream);box-shadow:0 0 8px var(--cream)}
 .view .pu.empty{opacity:.5}
+.view .camt{position:absolute;left:50%;bottom:14%;transform:translateX(-50%);font:700 clamp(24px,4vmin,44px) var(--disp);letter-spacing:.06em;background:var(--panel2);padding:2px 22px 5px;border-radius:999px;opacity:0;white-space:nowrap}
 .view .wrong{position:absolute;left:50%;top:38%;transform:translate(-50%,-50%) rotate(-3deg);font:700 clamp(30px,6vmin,70px) var(--disp);letter-spacing:.06em;color:var(--cream);background:rgba(255,90,106,.88);padding:2px 26px 6px;border-radius:999px;animation:blink .5s infinite;white-space:nowrap}
 .view .done{position:absolute;left:50%;top:30%;transform:translate(-50%,-50%) rotate(-2deg);font:700 clamp(40px,8vmin,96px) var(--disp);color:var(--cream);text-shadow:0 5px 0 rgba(36,18,47,.55);white-space:nowrap}
 .view .flash{position:absolute;inset:0;background:radial-gradient(transparent 40%,#ff4060);opacity:0;transition:opacity .5s}
@@ -193,7 +195,7 @@ button{font-family:var(--body);cursor:pointer}
     <button class="bb go" id="start">START RACE</button>
   </div>
   <div class="help">Phones: slide to steer (or turn on tilt), hold GAS, tap the core button to fire your power-up. Grab a <b>colour core</b> for a power-up, <b>white cores</b> make it stronger.<br>
-    Hold <b>brake while steering</b> at speed to drift; hold the drift to charge a mini turbo.<br>Keyboard: player 1 arrows + Space (fire) + Shift (look back) · player 2 WASD + F (fire) + R (look back) · Enter starts · Esc pauses · C camera · M music</div>
+    Hold <b>brake while steering</b> at speed to drift; hold the drift to charge a mini turbo. Change your <b>camera</b> any time (phone CAMERA button, or C / V).<br>Keyboard: player 1 arrows + Space (fire) + Shift (look back) · player 2 WASD + F (fire) + R (look back) · Enter starts · Esc pauses · C / V change camera · M music</div>
   <div class="credit">A Tekramos game · <a href="https://www.tekramos.com" target="_blank" rel="noopener">www.tekramos.com</a></div>
 </div>
 
@@ -208,7 +210,7 @@ button{font-family:var(--body);cursor:pointer}
     <button class="bb go" id="jstart">START</button>
     <div class="help">Arrows (or WASD) drive, Space fires your power-up, Shift looks back. Gamepads work too.<br>Two players here: player 1 arrows + Space, player 2 WASD + F. Anyone can press START when everyone is in.</div></div>
 </div>
-<div id="touch" class="hidden"><div class="tb" id="tl">◀</div><div class="tb" id="tr">▶</div><div class="tb" id="tbrake">BRAKE</div><div class="tb" id="tgas">GAS</div><div class="tb" id="tfire">FIRE</div></div>
+<div id="touch" class="hidden"><div class="tb" id="tl">◀</div><div class="tb" id="tr">▶</div><div class="tb" id="tbrake">BRAKE</div><div class="tb" id="tgas">GAS</div><div class="tb" id="tfire">FIRE</div><div class="tb" id="tcam">CAM</div></div>
 
 <div class="ov hidden" id="results"><div class="card"><h2>RESULTS</h2><table id="restab"></table>
   <div class="acts"><button class="bb go" id="again">RACE AGAIN</button><button class="bb gray" id="tolobby">LOBBY</button></div>
