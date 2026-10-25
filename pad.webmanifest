@@ -1,0 +1,2 @@
+{ "name": "Brick Racers Pad", "short_name": "BR Pad", "start_url": "./pad.html", "display": "fullscreen", "orientation": "landscape",
+  "background_color": "#1b3a8a", "theme_color": "#1b3a8a", "icons": [ { "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" } ] }

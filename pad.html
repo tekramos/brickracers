@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#1b3a8a">
+<meta name="apple-mobile-web-app-title" content="Brick Racers Pad">
+<link rel="manifest" href="pad.webmanifest">
+<link rel="icon" type="image/svg+xml" href="icons/icon.svg">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Lilita+One&family=Nunito:wght@700;900&display=swap">
+<title>Brick Racers Pad</title>
+<style>
+:root{--pc:#e3242b;--ink:#141a2e;--txt:#fff;--disp:"Lilita One",system-ui,sans-serif;
+  --st:max(8px,env(safe-area-inset-top));--sl:max(12px,env(safe-area-inset-left));--sr:max(12px,env(safe-area-inset-right));--sb:max(10px,env(safe-area-inset-bottom))}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+html,body{margin:0;height:100%;color:var(--txt);font-family:"Nunito",system-ui,-apple-system,"Segoe UI",sans-serif;font-weight:900;overflow:hidden;touch-action:none;overscroll-behavior:none;
+  background:#1b3a8a}
+/* a baseplate: studs all over */
+body{background:radial-gradient(circle at 50% 45%,rgba(255,255,255,.14) 0 9px,rgba(0,0,0,.18) 10px 11px,transparent 12px) 0 0/36px 36px,linear-gradient(160deg,#2456c9,#16307a)}
+#top{position:fixed;left:0;right:0;top:0;display:flex;align-items:center;gap:10px;padding:var(--st) var(--sr) 6px var(--sl);z-index:5;background:linear-gradient(rgba(10,16,40,.75),rgba(10,16,40,0))}
+#me{display:flex;align-items:center;gap:8px;font:20px var(--disp);letter-spacing:.02em;text-shadow:0 2px 0 rgba(0,0,0,.35)}
+#me .dot{width:22px;height:22px;border-radius:6px;background:var(--pc);box-shadow:inset 0 -3px 0 rgba(0,0,0,.25),0 0 0 2px rgba(255,255,255,.7)}
+#top .st{font-size:12px;color:#ffe46b;opacity:.9;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#top .st.ok{color:#8dffb0}
+#race{font:22px var(--disp);text-shadow:0 2px 0 rgba(0,0,0,.4);white-space:nowrap}
+#race b{color:#ffe14d}
+.tb{font:15px var(--disp);letter-spacing:.04em;padding:8px 12px;border-radius:12px;border:0;color:var(--ink);background:#ffe14d;box-shadow:inset 0 -4px 0 rgba(0,0,0,.2)}
+.tb.off{background:rgba(255,255,255,.25);color:#fff}
+#pad{position:fixed;inset:0}
+.half{position:absolute;top:0;bottom:0;width:50%}
+#L{left:0}#R{right:0}
+/* steering: a horizontal slider that appears where your thumb lands */
+#L .rail{position:absolute;height:64px;width:220px;margin:-32px 0 0 -110px;border-radius:32px;background:rgba(10,16,40,.35);border:3px solid rgba(255,255,255,.35);pointer-events:none;transition:opacity .2s}
+#L .rail.idle{opacity:.55}
+#L .knob{position:absolute;left:50%;top:50%;width:76px;height:76px;margin:-38px 0 0 -38px;border-radius:20px;background:var(--pc);box-shadow:inset 0 -6px 0 rgba(0,0,0,.25),0 4px 12px rgba(0,0,0,.4)}
+#L .knob::before,#L .knob::after{content:"";position:absolute;top:14px;width:18px;height:18px;border-radius:50%;background:rgba(255,255,255,.28);box-shadow:inset 0 -2px 0 rgba(0,0,0,.15)}
+#L .knob::before{left:14px}#L .knob::after{right:14px}
+#L .lbl{position:absolute;left:0;right:0;bottom:calc(var(--sb) + 8px);text-align:center;font-size:12px;opacity:.7}
+#tilt{position:absolute;left:var(--sl);bottom:calc(var(--sb) + 30px)}
+/* right side: big brick buttons */
+.btn{position:absolute;display:flex;align-items:center;justify-content:center;flex-direction:column;border-radius:22px;font:20px var(--disp);letter-spacing:.04em;color:#fff;text-shadow:0 2px 0 rgba(0,0,0,.3);
+  box-shadow:inset 0 -8px 0 rgba(0,0,0,.25),0 6px 14px rgba(0,0,0,.35);transition:transform .06s}
+.btn.on{transform:translateY(4px) scale(.97);box-shadow:inset 0 -3px 0 rgba(0,0,0,.25),0 2px 6px rgba(0,0,0,.35)}
+.btn small{font:700 11px "Nunito",sans-serif;opacity:.85;text-shadow:none}
+#bGas{right:var(--sr);bottom:var(--sb);width:min(36vw,190px);height:min(44vh,170px);background:#2fb24c}
+#bBrake{right:calc(var(--sr) + min(36vw,190px) + 12px);bottom:var(--sb);width:min(18vw,100px);height:min(30vh,110px);background:#7a8297}
+#bFire{right:var(--sr);bottom:calc(var(--sb) + min(44vh,170px) + 14px);width:min(36vw,190px);height:min(30vh,110px);background:#3b3f55}
+#bFire .brick{display:flex;gap:4px;align-items:center}
+#bFire .bk{width:46px;height:30px;border-radius:6px;background:var(--bc,#555);box-shadow:inset 0 -5px 0 rgba(0,0,0,.25);position:relative}
+#bFire .bk::before,#bFire .bk::after{content:"";position:absolute;top:-7px;width:14px;height:8px;border-radius:4px 4px 0 0;background:var(--bc,#555)}
+#bFire .bk::before{left:6px}#bFire .bk::after{right:6px}
+#bFire .pips{display:flex;gap:4px;margin-left:6px}
+#bFire .pips i{width:12px;height:12px;border-radius:3px;background:rgba(255,255,255,.18)}
+#bFire .pips i.on{background:#fff;box-shadow:0 0 8px #fff}
+#bFire.ready{background:#545b80;animation:pulse 1s infinite}
+@keyframes pulse{50%{filter:brightness(1.25)}}
+#pu{font-size:14px;margin-top:4px}
+#bStart{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:170px;height:84px;background:#e3242b;font-size:26px;z-index:3}
+#bStart.on{transform:translate(-50%,calc(-50% + 4px)) scale(.97)}
+#msg{position:fixed;left:50%;top:22%;transform:translateX(-50%);font:30px var(--disp);text-align:center;text-shadow:0 3px 0 rgba(0,0,0,.4);pointer-events:none;z-index:4;white-space:nowrap}
+#msg small{display:block;font:700 13px "Nunito",sans-serif;opacity:.85;text-shadow:none}
+#flash{position:fixed;inset:0;pointer-events:none;background:#fff;opacity:0;z-index:6;transition:opacity .4s}
+/* join screen */
+#join{position:fixed;inset:0;display:none;align-items:center;justify-content:center;flex-direction:column;gap:12px;z-index:9;padding:20px;background:rgba(10,16,40,.75);text-align:center}
+#join h1{margin:0;font:42px var(--disp);color:#ffe14d;text-shadow:0 4px 0 #b3261e,0 6px 12px rgba(0,0,0,.4);letter-spacing:.03em}
+#join input{font:24px var(--disp);text-align:center;padding:10px 14px;border-radius:14px;border:3px solid #fff;background:#fff;color:var(--ink);width:min(260px,80vw);text-transform:none;user-select:text;-webkit-user-select:text}
+#join #code{text-transform:uppercase;letter-spacing:.3em}
+#join .go{font:24px var(--disp);padding:12px 28px;border-radius:16px;border:0;background:#2fb24c;color:#fff;box-shadow:inset 0 -6px 0 rgba(0,0,0,.25)}
+#join p{margin:0;font-size:13px;opacity:.8;max-width:340px}
+#rot{position:fixed;inset:0;display:none;align-items:center;justify-content:center;z-index:8;background:rgba(10,16,40,.9);font:24px var(--disp);text-align:center;padding:30px;flex-direction:column;gap:8px}
+#rot small{font:700 13px "Nunito",sans-serif;opacity:.8}
+@media (orientation:portrait){#rot.show{display:flex}}
+</style>
+</head>
+<body>
+<div id="top"><div id="me"><span class="dot"></span><span class="nm">Racer</span></div><div class="st">Connecting…</div><div id="race"></div><button class="tb off" id="bLook">LOOK BACK</button></div>
+<div id="pad">
+  <div class="half" id="L"><div class="rail idle"><div class="knob"></div></div><button class="tb off" id="tilt">TILT: OFF</button><div class="lbl">slide to steer</div></div>
+  <div class="half" id="R"></div>
+  <div class="btn" id="bFire"><div class="brick"><div class="bk"></div><div class="pips"><i></i><i></i><i></i></div></div><div id="pu">no brick</div></div>
+  <div class="btn" id="bBrake">BRAKE<small>reverse</small></div>
+  <div class="btn" id="bGas">GAS</div>
+  <div class="btn" id="bStart">START</div>
+</div>
+<div id="msg"></div>
+<div id="flash"></div>
+<div id="rot" class="show">Turn your phone sideways<small>(it still works upright, but steering is easier sideways)</small><button class="tb" onclick="this.parentNode.classList.remove('show')">OK</button></div>
+<div id="join">
+  <h1>BRICK RACERS</h1>
+  <input id="name" maxlength="12" placeholder="Your name" autocomplete="nickname">
+  <input id="code" maxlength="4" placeholder="CODE" autocomplete="off">
+  <button class="go" id="go">JOIN RACE</button>
+  <p>The 4-letter code is on the big screen. Scanning the QR code fills it in for you.</p>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/mqtt@5.10.4/dist/mqtt.min.js"></script>
+<script>
+'use strict';
+const $ = s => document.querySelector(s);
+const st = $('#top .st');
+const counts = [0, 0, 0]; // fire, start, look presses
+const store = { get(k){ try { return localStorage.getItem(k); } catch (e) { return null; } }, set(k, v){ try { localStorage.setItem(k, v); } catch (e) {} } };
+const sess = { get(k){ try { return sessionStorage.getItem(k); } catch (e) { return null; } }, set(k, v){ try { sessionStorage.setItem(k, v); } catch (e) {} } };
+let code = (location.hash.slice(1) || '').toUpperCase().replace(/[^A-Z]/g, '').slice(0, 4), name = store.get('br-name') || '', gameState = 'lobby';
+// the phone's key survives a reload of this tab, so the game gives it back the same kart
+const KEY = sess.get('br-key') || Math.random().toString(36).slice(2, 10); sess.set('br-key', KEY);
+const EPOCH = Math.random().toString(36).slice(2, 6);
+
+/* ---------- steering: horizontal slider where the thumb lands, or tilt ---------- */
+const W = 90; // max knob travel in px
+const steer = (() => {
+  const el = $('#L'), rail = el.querySelector('.rail'), knob = el.querySelector('.knob');
+  const s = { id:null, x0:0, v:0 };
+  const home = () => { const r = el.getBoundingClientRect(); rail.style.left = (r.width * .5) + 'px'; rail.style.top = (r.height * .6) + 'px'; };
+  home(); addEventListener('resize', home);
+  const put = dx => { const k = Math.max(-W, Math.min(W, dx)); s.v = k / W; knob.style.transform = `translateX(${k}px)`; kick(); };
+  el.addEventListener('touchstart', e => { if (e.target.id === 'tilt') return; e.preventDefault(); wake(); if (s.id !== null) return; const t = e.changedTouches[0], r = el.getBoundingClientRect();
+    s.id = t.identifier; s.x0 = t.clientX; rail.style.left = (t.clientX - r.left) + 'px'; rail.style.top = (t.clientY - r.top) + 'px'; rail.classList.remove('idle'); put(0); }, { passive:false });
+  el.addEventListener('touchmove', e => { e.preventDefault(); for (const t of e.changedTouches) if (t.identifier === s.id) put(t.clientX - s.x0); }, { passive:false });
+  const end = e => { for (const t of e.changedTouches) if (t.identifier === s.id){ s.id = null; put(0); rail.classList.add('idle'); home(); } };
+  el.addEventListener('touchend', end); el.addEventListener('touchcancel', end);
+  return s;
+})();
+let tilt = false, tiltV = 0;
+function onTilt(e){
+  // phone held sideways: the steering angle is beta (portrait it is gamma)
+  const ang = ((screen.orientation ? screen.orientation.angle : window.orientation || 0) + 360) % 360;
+  let a = ang === 90 ? e.beta : ang === 270 ? -e.beta : e.gamma; if (a == null || isNaN(a)) return;
+  tiltV = Math.max(-1, Math.min(1, a / 28)); if (Math.abs(tiltV) < .06) tiltV = 0; kick();
+}
+$('#tilt').addEventListener('click', async () => {
+  tilt = !tilt;
+  if (tilt && window.DeviceOrientationEvent && typeof DeviceOrientationEvent.requestPermission === 'function'){
+    try { if (await DeviceOrientationEvent.requestPermission() !== 'granted') tilt = false; } catch (e) { tilt = false; }
+  }
+  if (tilt) addEventListener('deviceorientation', onTilt); else { removeEventListener('deviceorientation', onTilt); tiltV = 0; }
+  $('#tilt').textContent = 'TILT: ' + (tilt ? 'ON' : 'OFF'); $('#tilt').classList.toggle('off', !tilt);
+  $('#L .lbl').textContent = tilt ? 'tilt the phone to steer' : 'slide to steer';
+});
+
+/* ---------- buttons ---------- */
+const held = { gas:false, brake:false };
+function hold(id, k){
+  const b = $(id); const on = v => { held[k] = v; b.classList.toggle('on', v); push(true); };
+  b.addEventListener('touchstart', e => { e.preventDefault(); e.stopPropagation(); wake(); if (!held[k]) vib(8); on(true); }, { passive:false });
+  b.addEventListener('touchend', e => { e.preventDefault(); on(false); }); b.addEventListener('touchcancel', () => on(false));
+  b.addEventListener('mousedown', () => on(true)); b.addEventListener('mouseup', () => on(false)); b.addEventListener('mouseleave', () => held[k] && on(false)); // desktop testing
+}
+hold('#bGas', 'gas'); hold('#bBrake', 'brake');
+function tap(id, i){
+  const b = $(id);
+  b.addEventListener('touchstart', e => { e.preventDefault(); e.stopPropagation(); wake(); counts[i]++; b.classList.add('on'); vib(14); push(true); }, { passive:false });
+  b.addEventListener('touchend', () => b.classList.remove('on'));
+  b.addEventListener('click', () => { counts[i]++; push(true); }); // desktop testing
+}
+tap('#bFire', 0); tap('#bStart', 1); tap('#bLook', 2);
+
+/* ---------- sending: the moment the input changes (at most every 12ms), plus a 200ms heartbeat ---------- */
+let seq = 0, lastSent = '', lastT = 0, kickT = 0;
+const r2 = v => Math.round(v * 100) / 100;
+function push(force){
+  if (!direct() && !(mq && mq.connected)) return;
+  const sv = tilt ? tiltV : steer.v;
+  const m = { i:[r2(sv), held.gas ? 1 : 0, held.brake ? 1 : 0], c:counts.slice() }, j = JSON.stringify(m), t = performance.now();
+  if (!force && j === lastSent && t - lastT < 200) return;
+  lastSent = j; lastT = t; m.e = EPOCH; m.s = ++seq; m.n = name; send(m);
+}
+function kick(){ const t = performance.now(); if (t - lastT >= 12) push(); else if (!kickT) kickT = setTimeout(() => { kickT = 0; push(); }, 12 - (t - lastT)); }
+setInterval(push, 50);
+
+/* ---------- phone niceties ---------- */
+const vib = p => { try { navigator.vibrate && navigator.vibrate(p); } catch (e) {} };
+let woke = false;
+async function wake(){
+  if (woke) return; woke = true;
+  try { if (document.documentElement.requestFullscreen) await document.documentElement.requestFullscreen({ navigationUI:'hide' }); } catch (e) {}
+  try { screen.orientation && screen.orientation.lock && await screen.orientation.lock('landscape'); } catch (e) {}
+  try { if ('wakeLock' in navigator) await navigator.wakeLock.request('screen'); } catch (e) {}
+}
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible'){ woke = false; if (mq && !mq.connected) mq.reconnect(); if (!direct()) setTimeout(offer, 500); } });
+function flash(c){ const f = $('#flash'); f.style.background = c || '#fff'; f.style.transition = 'none'; f.style.opacity = .55; void f.offsetWidth; f.style.transition = 'opacity .5s'; f.style.opacity = 0; }
+let msgT = 0;
+function say(t, sub, ms){ $('#msg').innerHTML = ''; $('#msg').append(t); if (sub){ const s = document.createElement('small'); s.textContent = sub; $('#msg').append(s); } clearTimeout(msgT); if (ms) msgT = setTimeout(() => { $('#msg').textContent = ''; }, ms); }
+
+/* ---------- links: a relay through a public MQTT broker (works on any network), then a direct
+   WebRTC data channel negotiated through that relay, which takes over the moment it opens ---------- */
+const BROKERS = ['wss://broker.emqx.io:8084/mqtt', 'wss://broker.hivemq.com:8884/mqtt', 'wss://test.mosquitto.org:8081/mqtt'];
+const ICE = [{ urls:['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }, { urls:'stun:stun.cloudflare.com:3478' }];
+const QS = new URLSearchParams(location.search), TOPIC = () => 'brickracers/v1/' + code;
+let mq = null, relayUp = false, gameSeen = -1e9, pc = null, dc = null, rtcId = '', offerT = -1e9, ping = 0, tries = 0, slot = -1;
+const direct = () => !!(dc && dc.readyState === 'open');
+const linked = () => direct() || performance.now() - gameSeen < 3000;
+function send(o){
+  o.k = KEY; const j = JSON.stringify(o);
+  if (direct()){ try { dc.send(j); return; } catch (e) {} }
+  if (mq && mq.connected) mq.publish(TOPIC() + '/up', j, { qos:0 });
+}
+function status(t, ok){ st.textContent = t; st.className = 'st' + (ok ? ' ok' : ''); }
+function showLink(){ if (!linked() || slot < 0) return; status(code + ' · ' + (direct() ? 'direct' : 'relay') + (ping ? ' · ' + ping + ' ms' : ''), true); }
+function relay(){
+  if (mq || !window.mqtt) return;
+  const url = QS.get('bu') || BROKERS[+QS.get('b') || 0] || BROKERS[0];
+  mq = mqtt.connect(url, { clientId:'brp-' + Math.random().toString(16).slice(2, 10), keepalive:20, reconnectPeriod:2000, connectTimeout:6000, clean:true });
+  mq.on('connect', () => { relayUp = true; mq.subscribe(TOPIC() + '/down', { qos:0 }); if (!linked()) status('Looking for game ' + code + '…'); push(true); });
+  mq.on('message', (t, buf) => { let d; try { d = JSON.parse(buf.toString()); } catch (e) { return; } onGame(d); });
+  mq.on('close', () => { relayUp = false; });
+}
+function onGame(d){
+  if (!d || (d.to && d.to !== KEY)) return;
+  if (d.t === 'hi'){ push(true); return; } // the game (re)opened the room: say hello again
+  const was = linked(); gameSeen = performance.now();
+  if (!was){ vib([30, 50, 30]); if (!direct()) setTimeout(offer, 200); }
+  if (d.t === 'answer' && pc && d.id === rtcId && !pc.currentRemoteDescription) pc.setRemoteDescription({ type:'answer', sdp:d.sdp }).catch(() => {});
+  if (d.t === 'pong') ping = Math.round(performance.now() - d.ts);
+  if (d.t === 'buzz') vib(d.p);
+  if (d.t === 'full'){ gameSeen = -1e9; status('This race is full (5 players)'); say('Race is full', 'wait for the next race'); }
+  if (d.t === 'bye'){ gameSeen = -1e9; slot = -1; dropRtc(); status('Removed by the game'); say('Disconnected'); }
+  if (d.t === 'slot') setSlot(d);
+  if (d.t === 'st') state(d);
+  if (d.t === 'ev') event(d);
+  showLink();
+}
+function setSlot(d){
+  slot = d.i; document.documentElement.style.setProperty('--pc', d.col);
+  $('#me .nm').textContent = d.name || name || 'P' + (d.i + 1); $('meta[name=theme-color]').content = d.col;
+}
+const PU = { red:['#e3242b', 'Cannon', 'Homing missile', 'Twin missiles', 'Lightning'], yellow:['#ffcd03', 'Oil slick', 'Mine', 'Mine field', 'Shockwave'],
+             blue:['#1e6fe8', 'Shield', 'Long shield', 'Spike shield', 'Super shield'], green:['#2fb24c', 'Turbo', 'Big turbo', 'Mega turbo', 'Warp'] };
+const ord = n => n + (['th', 'st', 'nd', 'rd'][(n % 100 - 20) % 10] || ['th', 'st', 'nd', 'rd'][n % 100] || 'th');
+function state(d){
+  gameState = d.state;
+  const racing = d.state === 'race' || d.state === 'countdown';
+  $('#bStart').style.display = racing ? 'none' : 'flex';
+  $('#bStart').textContent = d.state === 'results' ? 'AGAIN' : d.state === 'pause' ? 'RESUME' : 'START';
+  $('#race').innerHTML = racing || d.state === 'results' ? `<b>${ord(d.pos)}</b> · LAP ${Math.min(d.lap, d.laps)}/${d.laps}` : (d.state === 'lobby' ? 'In the lobby' : '');
+  const f = $('#bFire'), bk = f.querySelector('.bk'), pips = f.querySelectorAll('.pips i');
+  const p = d.pu && PU[d.pu];
+  bk.style.setProperty('--bc', p ? p[0] : (d.w ? '#f4f4f4' : '#555'));
+  pips.forEach((e, i) => e.classList.toggle('on', i < (d.w || 0)));
+  $('#pu').textContent = p ? p[1 + (d.w || 0)] : d.w ? 'add a colour brick' : 'no brick';
+  f.classList.toggle('ready', !!p);
+  if (d.state === 'lobby') say('You are in!', 'press START on any phone when everyone has joined', 0);
+  else if (d.state === 'results' && d.fin) say(ord(d.pos) + ' place!', 'press AGAIN to race again', 0);
+  else if (d.state !== 'countdown') say('');
+}
+function event(d){
+  if (d.e === 'hit'){ vib([60, 40, 120]); flash('#ff3030'); }
+  if (d.e === 'pick'){ vib(18); }
+  if (d.e === 'lap'){ vib([20, 30, 20]); say(d.txt || 'Lap!', '', 1400); }
+  if (d.e === 'go'){ vib(80); say('GO!', '', 900); }
+  if (d.e === 'count'){ vib(30); say(String(d.n), '', 900); }
+  if (d.e === 'finish'){ vib([40, 40, 40, 40, 200]); flash('#ffe14d'); }
+}
+// direct link: offer through the relay, the game answers
+async function offer(){
+  if (direct() || !relayUp || !window.RTCPeerConnection || performance.now() - offerT < 4000) return;
+  offerT = performance.now(); dropRtc(); tries++;
+  const p = pc = new RTCPeerConnection({ iceServers: ICE }), id = rtcId = Math.random().toString(36).slice(2, 10);
+  const c = dc = p.createDataChannel('pad', { ordered:false, maxRetransmits:0 });
+  c.onopen = () => { if (dc === c){ vib(20); push(true); showLink(); } };
+  c.onclose = () => { if (dc === c){ dc = null; showLink(); setTimeout(offer, 3000); } };
+  c.onmessage = e => { let d; try { d = JSON.parse(e.data); } catch (er) { return; } onGame(d); };
+  try {
+    await p.setLocalDescription(await p.createOffer());
+    await new Promise(ok => { if (p.iceGatheringState === 'complete') return ok(); const t = setTimeout(ok, 2500); p.addEventListener('icegatheringstatechange', () => { if (p.iceGatheringState === 'complete'){ clearTimeout(t); ok(); } }); });
+    if (p === pc && mq && mq.connected) mq.publish(TOPIC() + '/up', JSON.stringify({ t:'offer', k:KEY, id, sdp:p.localDescription.sdp }), { qos:0 });
+  } catch (e) {}
+  // if it hasn't opened in 10s the network blocks direct links: stay on the relay, try again later
+  setTimeout(() => { if (pc === p && !direct() && tries < 4) offer(); }, 10000);
+}
+function dropRtc(){ if (dc) try { dc.close(); } catch (e) {} if (pc) try { pc.close(); } catch (e) {} dc = pc = null; }
+setInterval(() => { if (linked()){ send({ t:'ping', ts: performance.now() }); if (!direct() && !pc) offer(); } else if (code && relayUp) status('Looking for game ' + code + '…'); }, 1000);
+addEventListener('pagehide', () => send({ t:'bye' }));
+function connect(){
+  if (!code || !name){ $('#join').style.display = 'flex'; $('#name').value = name; $('#code').value = code; (name ? $('#code') : $('#name')).focus(); return; }
+  $('#join').style.display = 'none'; $('#me .nm').textContent = name; status('Connecting to ' + code + '…');
+  relay();
+}
+$('#go').onclick = () => {
+  const c = $('#code').value.toUpperCase().replace(/[^A-Z]/g, '').slice(0, 4), n = $('#name').value.trim().slice(0, 12);
+  if (!n){ $('#name').focus(); return; } if (c.length !== 4){ $('#code').focus(); return; }
+  name = n; store.set('br-name', n); code = c; history.replaceState(null, '', location.pathname + location.search + '#' + code); connect();
+};
+$('#join').addEventListener('keydown', e => { if (e.key === 'Enter') $('#go').click(); });
+if (window.mqtt) connect(); else status('Could not load the link library. Check your connection.');
+</script>
+</body>
+</html>
