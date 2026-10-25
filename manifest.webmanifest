@@ -1,2 +1,2 @@
-{ "name": "Brick Racers", "short_name": "Brick Racers", "start_url": "./", "display": "fullscreen", "orientation": "landscape",
-  "background_color": "#2456c9", "theme_color": "#2456c9", "icons": [ { "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" } ] }
+{ "name": "TekRacers", "short_name": "TekRacers", "start_url": "./", "display": "fullscreen", "orientation": "landscape",
+  "background_color": "#24122f", "theme_color": "#24122f", "icons": [ { "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" } ] }

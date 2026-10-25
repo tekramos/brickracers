@@ -1,14 +1,16 @@
 /* ============================================================
-   One race: kart driving, laps and positions, brick pickups, power-ups, AI drivers and effects.
-   Power-ups work like the classic brick racer: a colour brick picks the kind of power-up,
-   white bricks (up to 3) make it stronger, and using it spends them all.
+   One race: kart driving, laps and positions, energy-core pickups, power-ups, AI drivers and effects.
+   Power-ups: a colour core picks the kind of power-up,
+   white cores (up to 3) make it stronger, and using it spends them all.
      red    : cannon ball · homing missile · twin missiles · lightning on everyone ahead
      yellow : oil slick · mine · mine field · shockwave around you
      blue   : shield · long shield · spike shield (spins karts you touch) · super shield
      green  : turbo · big turbo · mega turbo · warp forward
+   Drifting: hold brake while steering at speed to slide; hold the slide to charge a mini turbo.
    ============================================================ */
 import * as THREE from 'three';
-import { kart, brick, toon, basic, COLORS } from './models.js';
+import { kart, core, blob, COLORS } from './models.js';
+import { stylize, emissive, Particles, Skids } from './look.js';
 import { HALF_W } from './track.js';
 import { Snd } from './audio.js';
 
@@ -20,7 +22,7 @@ export const PU = {
 };
 const KINDS = ['red', 'yellow', 'blue', 'green'];
 const MAX_SPEED = 40, ACCEL = 24, BRAKE = 50, REVERSE = 12, TURN = 2.0, GRIP = 7, LIM = HALF_W - 1.5, KART_R = 1.7;
-export const AI_NAMES = ['Cap\'n Stud', 'Rita Rocket', 'Baron Bolt', 'Kiki Tiki', 'Sir Plate'];
+export const AI_NAMES = ['Vex', 'Nova', 'Raze', 'Kairo', 'Zenit'];
 const START = 4; // sample index of the start line
 
 const wrapPi = a => { while (a > Math.PI) a -= Math.PI * 2; while (a < -Math.PI) a += Math.PI * 2; return a; };
@@ -32,6 +34,9 @@ export class Race {
     this.root = new THREE.Group(); scene.add(this.root);
     this.time = 0; this.state = 'countdown'; this.count = 3.6; this.lastCount = 4; this.overT = 0;
     this.projectiles = []; this.hazards = []; this.fx = []; this.bricks = [];
+    // online: `log` collects effects and sounds for joiners (host), `client` mirrors the host's race (joiner)
+    this.nid = 0; this.log = null; this.client = false;
+    this.parts = new Particles(this.root, 600); this.skids = new Skids(this.root, 1200);
     this.karts = players.map((pl, i) => this.makeKart(pl, i));
     this.placeBricks();
   }
@@ -44,16 +49,14 @@ export class Race {
     this.root.add(mesh);
     const k = { pl, mesh, x:p.x, z:p.z, y:p.y, h:t.heading(idx), vx:0, vz:0, idx, prog: -(t.wrap(START - idx)), lapDone:0,
       place:i + 1, fin:false, finT:0, pu:null, w:0, spin:0, flip:0, boost:0, shield:0, shieldLvl:0, inv:0, wrongT:0, wrong:false,
-      wheel:0, steer:0, look:0, speed:0, bumpT:0,
-      cam: new THREE.PerspectiveCamera(70, 1, .3, 2000), camPos:new THREE.Vector3(), camLook:new THREE.Vector3(),
+      wheel:0, steer:0, look:0, speed:0, bumpT:0, drift:0, dch:0, roll:0, pitch:0, susp:0, suspV:0, lastF:0, skidAt:[null, null], dustT:0,
+      cam: new THREE.PerspectiveCamera(30, 1, 1, 1600), camPos:new THREE.Vector3(), camLook:new THREE.Vector3(), camMode:Race.defaultCam, camYaw:0, camDist:60, focus:new THREE.Vector3(), snap:true,
       ai: pl.kind === 'ai' ? { lane:(Math.random() - .5) * 8, laneT:0, skill:.9 + Math.random() * .07, hold:0 } : null };
-    // start the camera behind the kart
-    const f = new THREE.Vector3(Math.sin(k.h), 0, Math.cos(k.h));
-    k.camPos.set(k.x - f.x * 10, k.y + 4.5, k.z - f.z * 10); k.camLook.set(k.x + f.x * 6, k.y + 1.2, k.z + f.z * 6);
+    k.camYaw = k.h; k.focus.set(k.x, k.y, k.z);
     return k;
   }
 
-  /* ---------- bricks ---------- */
+  /* ---------- energy cores (pickups) ---------- */
   placeBricks(){
     const t = this.track;
     for (const f of [.1, .27, .44, .6, .76, .9]){
@@ -64,12 +67,11 @@ export class Race {
       }
     }
   }
-  spawnBrick(b){
+  spawnBrick(b, color){
     if (b.mesh) this.root.remove(b.mesh);
-    b.color = Math.random() < .3 ? 'white' : KINDS[Math.random() * 4 | 0];
-    b.mesh = brick(COLORS[b.color]); b.mesh.position.copy(b.pos); b.mesh.position.y += 1.4; this.root.add(b.mesh);
-    const bl = new THREE.Mesh(new THREE.CircleGeometry(1.2, 16).rotateX(-Math.PI / 2), basic('#000000', { transparent:true, opacity:.22, depthWrite:false }));
-    bl.position.y = -1.3; b.mesh.add(bl);
+    b.color = color || (Math.random() < .3 ? 'white' : KINDS[Math.random() * 4 | 0]);
+    b.mesh = core(COLORS[b.color]); b.mesh.position.copy(b.pos); b.mesh.position.y += 1.6; this.root.add(b.mesh);
+    const bl = blob(2.6, 2.6); bl.position.y = -1.5; b.mesh.add(bl); b.mesh.userData.shadow = bl;
     b.active = true;
   }
   collect(k, b){
@@ -77,7 +79,7 @@ export class Race {
     this.burst(b.pos.x, b.pos.y + 1.4, b.pos.z, COLORS[b.color], 6, 8);
     if (b.color === 'white'){ if (k.w < 3) k.w++; }
     else k.pu = b.color;
-    if (k.pl.kind !== 'ai'){ Snd.play(b.color === 'white' ? 'white' : 'brick'); k.pl.notify({ e:'pick' }); }
+    this.snd(b.color === 'white' ? 'white' : 'brick', k); if (k.pl.kind !== 'ai') k.pl.notify({ e:'pick' });
     if (k.ai) k.ai.hold = .6 + Math.random() * 2.5;
   }
 
@@ -87,9 +89,9 @@ export class Race {
     if (this.state === 'countdown'){
       this.count -= dt;
       const c = Math.ceil(this.count - .6);
-      if (c < this.lastCount && c >= 1){ this.lastCount = c; Snd.play('count'); this.onEvent({ e:'count', n:c }); }
+      if (c < this.lastCount && c >= 1){ this.lastCount = c; this.snd('count'); this.onEvent({ e:'count', n:c }); }
       if (this.count <= .6){
-        this.state = 'race'; this.raceStart = this.time; Snd.play('go'); this.onEvent({ e:'go' });
+        this.state = 'race'; this.raceStart = this.time; this.snd('go'); this.onEvent({ e:'go' });
         // a rocket start for anyone holding the gas at GO
         for (const k of this.karts) if (k.pl.input.gas || k.ai) k.boost = k.ai ? .3 + Math.random() * .4 : .8;
       }
@@ -127,28 +129,38 @@ export class Race {
     if (dt > 0){
       if (k.boost > 0) fwd += (max - fwd) * Math.min(1, dt * 4);
       else if (gas) fwd += ACCEL * dt * Math.max(0, 1 - fwd / max) * (fwd < 12 ? 1.6 : 1);
-      if (brake){ if (fwd > .5) fwd -= BRAKE * dt; else fwd = Math.max(-REVERSE, fwd - ACCEL * .6 * dt); }
+      // drift: brake + steer at speed slides the kart instead of braking hard (players only)
+      if (!k.ai && !k.fin && brake && Math.abs(steer) > .35 && fwd > 16 && !k.drift) k.drift = Math.sign(steer);
+      if (k.drift && (!brake || fwd < 9 || stunned)){
+        if (k.dch > .8 && !stunned){ k.boost = Math.max(k.boost, k.dch > 1.8 ? .9 : .5); this.snd('turbo', k); }
+        k.drift = 0; k.dch = 0;
+      }
+      if (k.drift){ fwd -= 3 * dt; k.dch += dt; if (gas) fwd += ACCEL * .4 * dt * Math.max(0, 1 - fwd / max); }
+      else if (brake){ if (fwd > .5) fwd -= BRAKE * dt; else fwd = Math.max(-REVERSE, fwd - ACCEL * .6 * dt); }
       if (!gas && !brake && k.boost <= 0) fwd -= fwd * .6 * dt;
       if (fwd > max) fwd += (max - fwd) * Math.min(1, dt * 2);
       // steering: stronger at low speed, gentler at full speed, reversed when backing up
       const sp = Math.abs(fwd), turn = TURN * Math.min(1, sp / 8) * (1 - .3 * Math.min(1, sp / MAX_SPEED)) * Math.sign(fwd || 1);
-      k.h -= k.steer * turn * dt;
+      // drifting: the kart turns harder towards the drift side, and the slide pushes it outwards
+      const dSteer = k.drift ? clamp(k.steer * .6 + k.drift * .55, -1.15, 1.15) : k.steer;
+      k.h -= dSteer * turn * dt * (k.drift ? 1.3 : 1);
+      if (k.drift) lat += k.drift * sp * 1.1 * dt;
       if (k.spin > 0) { k.h += dt * 9; fwd *= Math.pow(.25, dt); }
       if (k.flip > 0) fwd *= Math.pow(.2, dt);
       // keep sideways slide low: a touch of drift when cornering hard
-      lat *= Math.exp(-GRIP * dt * (k.spin > 0 ? .2 : 1));
+      lat *= Math.exp(-GRIP * dt * (k.spin > 0 ? .2 : k.drift ? .32 : 1));
       const nfx = Math.sin(k.h), nfz = Math.cos(k.h), nrx = -Math.cos(k.h), nrz = Math.sin(k.h);
       k.vx = nfx * fwd + nrx * lat; k.vz = nfz * fwd + nrz * lat;
       k.x += k.vx * dt; k.z += k.vz * dt;
     }
-    // stay on the road: the brick walls push back
+    // stay on the road: the barriers push back
     const loc = t.locate(k.x, k.z, k.idx);
     if (Math.abs(loc.side) > LIM){
       const s = Math.sign(loc.side), r = t.R[loc.i], over = Math.abs(loc.side) - LIM;
       k.x -= r.x * s * over; k.z -= r.z * s * over;
       const vn = (k.vx * r.x + k.vz * r.z) * s;
       if (vn > 0){ k.vx -= r.x * s * vn * 1.3; k.vz -= r.z * s * vn * 1.3; k.vx *= .97; k.vz *= .97;
-        if (vn > 7 && !k.bumpT){ k.bumpT = .4; if (k.pl.kind !== 'ai') Snd.play('bump'); this.burst(k.x + r.x * s * 1.5, loc.y + .8, k.z + r.z * s * 1.5, '#ffffff', 3, 4, 'puff'); } }
+        if (vn > 7 && !k.bumpT){ k.bumpT = .4; this.snd('bump', k); this.burst(k.x + r.x * s * 1.5, loc.y + .8, k.z + r.z * s * 1.5, '#ffffff', 3, 4, 'puff'); } }
       // turn the nose along the wall a little when scraping it
       const th = t.heading(loc.i), d = wrapPi(th - k.h); if (Math.abs(d) < 1.2 && vn > 0) k.h += d * Math.min(1, rdt * 2);
     }
@@ -156,35 +168,75 @@ export class Race {
     let d = loc.i - k.idx; const N = t.N; if (d > N / 2) d -= N; if (d < -N / 2) d += N;
     k.idx = loc.i; k.prog += d;
     const lapsDone = Math.floor(k.prog / N);
-    if (lapsDone > k.lapDone && !k.fin){
+    // laps and the finish are decided by the host only
+    if (lapsDone > k.lapDone && !k.fin && !this.client){
       k.lapDone = lapsDone;
-      if (lapsDone >= this.laps){ k.fin = true; k.finT = this.raceTime; if (k.pl.kind !== 'ai'){ Snd.play('finish'); k.pl.notify({ e:'finish' }); } }
-      else if (k.pl.kind !== 'ai'){ Snd.play('lap'); k.pl.notify({ e:'lap', txt: lapsDone === this.laps - 1 ? 'Final lap!' : 'Lap ' + (lapsDone + 1) }); }
+      if (lapsDone >= this.laps){ k.fin = true; k.finT = this.raceTime; this.snd('finish', k); if (k.pl.kind !== 'ai') k.pl.notify({ e:'finish' }); }
+      else { this.snd('lap', k); if (k.pl.kind !== 'ai') k.pl.notify({ e:'lap', txt: lapsDone === this.laps - 1 ? 'Final lap!' : 'Lap ' + (lapsDone + 1) }); }
     }
     // driving the wrong way?
     const tt = t.T[loc.i], spd = Math.hypot(k.vx, k.vz);
     if (spd > 4 && (k.vx * tt.x + k.vz * tt.z) / spd < -.4 && this.state === 'race') k.wrongT += rdt; else k.wrongT = 0;
     k.wrong = k.wrongT > 1.2;
-    k.speed = fwd;
-    // place the model
-    const m = k.mesh, flipH = k.flip > 0 ? Math.sin((1 - k.flip / 1.4) * Math.PI) * 5 : 0;
-    k.y += ((loc.y) - k.y) * Math.min(1, rdt * 12);
+    k.speed = fwd; k.ly = loc.y; k.slope = loc.slope;
+    this.pose(k, rdt);
+    // drift sparks: blue, then orange once the mini turbo is charged
+    if (k.drift && this.state !== 'countdown'){
+      const col = k.dch > 1.8 ? '#ff9a3c' : k.dch > .8 ? '#5fd8ff' : '#ffffff';
+      if (Math.random() < rdt * 40) for (const s of [-1, 1]){ const rx = -Math.cos(k.h), rz = Math.sin(k.h), bx = k.x - Math.sin(k.h) * 1.3 + rx * s * 1.1, bz = k.z - Math.cos(k.h) * 1.3 + rz * s * 1.1;
+        this.parts.add(bx, k.y + .3, bz, (Math.random() - .5) * 4 - Math.sin(k.h) * 4, 2 + Math.random() * 3, (Math.random() - .5) * 4 - Math.cos(k.h) * 4, .1 + Math.random() * .08, .35, col, 'spark', k.y); }
+    }
+  }
+  // place the kart model from its state: position, tilt, wheels, driver, shield and flames
+  pose(k, rdt){
+    const m = k.mesh, fwd = k.speed, flipH = k.flip > 0 ? Math.sin((1 - k.flip / 1.4) * Math.PI) * 5 : 0;
+    k.y += (k.ly - k.y) * Math.min(1, rdt * 12);
     m.position.set(k.x, k.y + flipH, k.z);
     m.rotation.y = k.h;
-    m.rotation.x = -Math.atan2(loc.slope, 1) * .9;
+    m.rotation.x = -Math.atan2(k.slope, 1) * .9;
     const body = m.userData.body;
-    body.rotation.z = -k.steer * Math.min(1, Math.abs(fwd) / MAX_SPEED) * .12;
-    body.rotation.x = k.flip > 0 ? (1 - k.flip / 1.4) * Math.PI * 2 : 0;
-    body.position.y = k.flip > 0 ? 1 : Math.sin(this.time * 30 + k.pl.slot) * .02 * Math.min(1, Math.abs(fwd) / 10);
+    // body on springs: it leans out of corners, squats when accelerating and dives when braking
+    const fx = Math.sin(k.h), fz = Math.cos(k.h), lat = k.vx * -fz + k.vz * fx;
+    const dtc = Math.max(rdt, 1e-3), accF = (fwd - k.lastF) / dtc;
+    k.lastF = fwd;
+    const wantRoll = clamp(-k.steer * Math.min(1, Math.abs(fwd) / MAX_SPEED) * .14 - lat * .012, -.22, .22) + (k.drift ? k.drift * .07 : 0);
+    const wantPitch = clamp(-accF * .0035, -.09, .09);
+    const sa = 1 - Math.exp(-rdt * 9); k.roll += (wantRoll - k.roll) * sa; k.pitch += (wantPitch - k.pitch) * sa;
+    k.suspV += (-k.susp * 260 - k.suspV * 14) * rdt + (Math.random() - .5) * Math.min(1, Math.abs(fwd) / 20) * 4 * rdt; k.susp += k.suspV * rdt;
+    body.rotation.z = k.roll;
+    body.rotation.x = k.flip > 0 ? (1 - k.flip / 1.4) * Math.PI * 2 : k.pitch;
+    body.position.y = k.flip > 0 ? 1 : k.susp;
+    // a drifting kart is drawn turned a little more into the slide
+    body.rotation.y += ((k.drift ? -k.drift * .32 : clamp(-lat * .02, -.2, .2)) - body.rotation.y) * sa;
+    this.trail(k, rdt, lat, fwd);
     m.userData.blob.position.y = .06 - flipH; m.userData.blob.scale.setScalar(1 / (1 + flipH * .15));
     k.wheel += fwd * rdt / .55;
     for (const w of m.userData.wheels) w.children[0].rotation.x = k.wheel;
     for (const w of m.userData.front) w.rotation.y = -k.steer * .45;
-    m.userData.driver.userData.head.rotation.y = -k.steer * .35;
     m.userData.shield.visible = k.shield > 0 && (k.shield > 1 || Math.sin(this.time * 30) > 0);
     if (m.userData.shield.visible){ m.userData.shield.material.color.set(k.shieldLvl >= 2 ? '#ff9de2' : '#6fd0ff'); m.userData.shield.rotation.y += rdt * 2; }
     const fl = m.userData.flames; fl.visible = k.boost > 0; if (fl.visible) fl.scale.set(1, 1, .7 + Math.random() * .6);
     m.visible = !(k.inv > 0 && k.warped && Math.sin(this.time * 40) > .3);
+  }
+  // tyre marks and dust while the kart slides, smoke behind a boost
+  trail(k, rdt, lat, fwd){
+    if (rdt <= 0) return;
+    const sliding = (Math.abs(lat) > 4.5 && Math.abs(fwd) > 8) || k.spin > 0 || (k.drift && Math.abs(fwd) > 8);
+    const fx = Math.sin(k.h), fz = Math.cos(k.h), rx = -fz, rz = fx;
+    for (let s = 0; s < 2; s++){
+      const side = s ? 1.12 : -1.12, wx = k.x - fx * 1.2 + rx * side, wz = k.z - fz * 1.2 + rz * side, prev = k.skidAt[s];
+      if (!sliding || k.flip > 0){ k.skidAt[s] = null; continue; }
+      if (!prev){ k.skidAt[s] = { x:wx, z:wz }; continue; }
+      const dx = wx - prev.x, dz = wz - prev.z, d = Math.hypot(dx, dz);
+      if (d > .7){ if (d < 6) this.skids.add((wx + prev.x) / 2, k.ly, (wz + prev.z) / 2, Math.atan2(dx, dz), d + .1, .42); prev.x = wx; prev.z = wz; }
+    }
+    k.dustT -= rdt;
+    if (k.dustT <= 0 && (sliding || k.boost > 0)){
+      k.dustT = sliding ? .045 : .07;
+      const s = Math.random() < .5 ? -1 : 1, bx = k.x - fx * 1.6 + rx * s * 1.1, bz = k.z - fz * 1.6 + rz * s * 1.1;
+      this.parts.add(bx, k.ly + .4, bz, -k.vx * .15 + (Math.random() - .5) * 2, .8 + Math.random(), -k.vz * .15 + (Math.random() - .5) * 2,
+        .26 + Math.random() * .2, .6, sliding ? '#f3e6ff' : '#ffd9b0', 'dust');
+    }
   }
   // keep the pack together a little so everyone stays in the race
   rubber(k){
@@ -202,7 +254,7 @@ export class Race {
   think(k, dt){
     const a = k.ai, t = this.track;
     a.laneT -= dt; if (a.laneT <= 0){ a.laneT = 1.5 + Math.random() * 3; a.lane = clamp(a.lane + (Math.random() - .5) * 6, -5.5, 5.5); }
-    // go for a brick in the next row when it has nothing to use yet
+    // go for a core in the next row when it has nothing to use yet
     if (!k.pu || k.w < 3){
       for (const b of this.bricks){ const ahead = t.wrap(b.idx - k.idx); if (b.active && ahead > 6 && ahead < 45 && (!k.pu || b.color === 'white')){ a.lane = b.side; break; } }
     }
@@ -226,33 +278,28 @@ export class Race {
   use(k){
     if (!k.pu || this.state !== 'race' && this.state !== 'over' || k.flip > 0) return false;
     const kind = k.pu, lv = k.w; k.pu = null; k.w = 0;
-    const human = k.pl.kind !== 'ai';
     if (kind === 'red'){
-      if (lv === 0){ this.fire(k, 'cannon', 0); human && Snd.play('cannon'); }
-      else if (lv < 3){ for (let i = 0; i < lv; i++) this.fire(k, 'missile', (i - (lv - 1) / 2) * .35, i); human && Snd.play('missile'); }
+      if (lv === 0){ this.fire(k, 'cannon', 0); this.snd('cannon', k); }
+      else if (lv < 3){ for (let i = 0; i < lv; i++) this.fire(k, 'missile', (i - (lv - 1) / 2) * .35, i); this.snd('missile', k); }
       else this.lightning(k);
     } else if (kind === 'yellow'){
       if (lv === 0) this.drop(k, 'oil', 0);
       else if (lv === 1) this.drop(k, 'mine', 0);
       else if (lv === 2) [-4, 0, 4].forEach(s => this.drop(k, 'mine', s));
       else this.shockwave(k);
-      human && Snd.play(lv === 0 ? 'oil' : 'bump');
+      this.snd(lv === 0 ? 'oil' : 'bump', k);
     } else if (kind === 'blue'){
-      k.shield = [3.5, 6, 8, 10][lv]; k.shieldLvl = lv; human && Snd.play('shield');
+      k.shield = [3.5, 6, 8, 10][lv]; k.shieldLvl = lv; this.snd('shield', k);
     } else if (kind === 'green'){
-      if (lv < 3){ k.boost = [1.2, 2, 3][lv]; human && Snd.play('turbo'); }
+      if (lv < 3){ k.boost = [1.2, 2, 3][lv]; this.snd('turbo', k); }
       else this.warp(k);
     }
     return true;
   }
   fire(k, kind, ang, n = 0){
     const f = new THREE.Vector3(Math.sin(k.h + ang), 0, Math.cos(k.h + ang));
-    const mesh = new THREE.Group();
-    if (kind === 'cannon'){ const b = new THREE.Mesh(new THREE.SphereGeometry(.7, 14, 10), toon(COLORS.black)); mesh.add(b); }
-    else { const b = new THREE.Mesh(new THREE.CylinderGeometry(.35, .35, 2, 10).rotateX(Math.PI / 2), toon(COLORS.white)); mesh.add(b);
-      const nose = new THREE.Mesh(new THREE.ConeGeometry(.35, .7, 10).rotateX(Math.PI / 2), toon(COLORS.red)); nose.position.z = 1.3; mesh.add(nose);
-      const fin = new THREE.Mesh(new THREE.BoxGeometry(1.2, .1, .5), toon(COLORS.red)); fin.position.z = -.8; mesh.add(fin); }
-    const p = { kind, mesh, owner:k, x:k.x + f.x * 3, z:k.z + f.z * 3, y:k.y + 1.2, h:k.h + ang, speed:kind === 'cannon' ? 75 : 62, life:kind === 'cannon' ? 2.5 : 5, idx:k.idx, target:null, delay:n * .15, trail:0 };
+    const mesh = Race.projMesh(kind);
+    const p = { id:++this.nid, kind, mesh, owner:k, x:k.x + f.x * 3, z:k.z + f.z * 3, y:k.y + 1.2, h:k.h + ang, speed:kind === 'cannon' ? 75 : 62, life:kind === 'cannon' ? 2.5 : 5, idx:k.idx, target:null, delay:n * .15, trail:0 };
     if (kind === 'missile'){
       // lock on to the n-th kart ahead
       const ahead = this.karts.filter(o => o !== k && o.prog > k.prog).sort((a, b) => a.prog - b.prog);
@@ -282,18 +329,15 @@ export class Race {
         if (k === p.owner && p.life > (p.kind === 'cannon' ? 2.2 : 4.6)) continue;
         if (Math.hypot(k.x - p.x, k.z - p.z) < KART_R + .9 && Math.abs(k.y - p.y) < 4){ this.hit(k, p.kind === 'cannon' ? 'spin' : 'flip', p.owner); done = true; break; }
       }
-      if (done){ this.root.remove(p.mesh); this.projectiles.splice(this.projectiles.indexOf(p), 1); this.burst(p.x, p.y, p.z, COLORS.orange, 8, 10); Snd.play('boom'); }
+      if (done){ this.root.remove(p.mesh); this.projectiles.splice(this.projectiles.indexOf(p), 1); this.burst(p.x, p.y, p.z, COLORS.orange, 8, 10); this.snd('boom'); }
     }
   }
   drop(k, kind, side){
     const t = this.track, f = new THREE.Vector3(Math.sin(k.h), 0, Math.cos(k.h)), r = t.R[k.idx];
     const x = k.x - f.x * 3.5 + r.x * side, z = k.z - f.z * 3.5 + r.z * side, loc = t.locate(x, z, k.idx);
-    let mesh;
-    if (kind === 'oil'){ mesh = new THREE.Mesh(new THREE.CircleGeometry(3, 20).rotateX(-Math.PI / 2), basic('#15121c')); mesh.position.set(x, loc.y + .12, z); mesh.scale.set(1, 1, .8); }
-    else { mesh = new THREE.Group(); const b = new THREE.Mesh(new THREE.SphereGeometry(.8, 14, 8, 0, Math.PI * 2, 0, Math.PI / 2), toon(COLORS.dark)); mesh.add(b);
-      const l = new THREE.Mesh(new THREE.SphereGeometry(.25, 8, 6), basic(COLORS.red)); l.position.y = .75; mesh.add(l); mesh.userData.light = l; mesh.position.set(x, loc.y + .1, z); }
+    const mesh = Race.hazardMesh(kind); mesh.position.set(x, loc.y + (kind === 'oil' ? .12 : .1), z);
     this.root.add(mesh);
-    this.hazards.push({ kind, mesh, x, z, owner:k, life:kind === 'oil' ? 18 : 30, arm:.6, hitBy:new Map() });
+    this.hazards.push({ id:++this.nid, kind, mesh, x, z, owner:k, life:kind === 'oil' ? 18 : 30, arm:.6, hitBy:new Map() });
   }
   updateHazards(dt){
     for (const h of [...this.hazards]){
@@ -304,30 +348,35 @@ export class Race {
         if (h.arm > 0 && k === h.owner) continue;
         const d = Math.hypot(k.x - h.x, k.z - h.z);
         if (h.kind === 'oil' && d < 3.2){ const last = h.hitBy.get(k) || -9; if (this.time - last > 2){ h.hitBy.set(k, this.time); this.hit(k, 'spin', h.owner, true); } }
-        if (h.kind === 'mine' && d < 2.4){ this.hit(k, 'flip', h.owner); gone = true; this.burst(h.x, .8, h.z, COLORS.orange, 10, 12); Snd.play('boom'); break; }
+        if (h.kind === 'mine' && d < 2.4){ this.hit(k, 'flip', h.owner); gone = true; this.burst(h.x, .8, h.z, COLORS.orange, 10, 12); this.snd('boom'); break; }
       }
       if (gone){ this.root.remove(h.mesh); this.hazards.splice(this.hazards.indexOf(h), 1); }
     }
   }
   lightning(k){
-    Snd.play('zap'); this.onEvent({ e:'flash', col:'#fff8a0' });
+    this.snd('zap'); this.onEvent({ e:'flash', col:'#fff8a0' });
     for (const o of this.karts) if (o !== k && o.prog > k.prog){
       this.bolt(o.x, o.y, o.z); this.hit(o, 'spin', k);
     }
   }
   bolt(x, y, z){
+    if (this.log) this.log.push(['l', +x.toFixed(1), +y.toFixed(1), +z.toFixed(1)]);
     const pts = []; let px = x, pz = z;
     for (let i = 0; i <= 10; i++){ pts.push(new THREE.Vector3(px, y + 40 - i * 4, pz)); px = x + (Math.random() - .5) * 3; pz = z + (Math.random() - .5) * 3; }
     pts[10].set(x, y + 1, z);
     const g = new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 30, .25, 5, false);
-    const m = new THREE.Mesh(g, basic('#fff36b')); this.root.add(m);
+    const m = new THREE.Mesh(g, emissive('#fff36b', 3.2)); this.root.add(m);
     this.fx.push({ mesh:m, life:.45, max:.45, kind:'bolt' });
   }
   shockwave(k){
-    Snd.play('boom');
-    const ring = new THREE.Mesh(new THREE.TorusGeometry(1, .35, 8, 40).rotateX(Math.PI / 2), basic('#fff36b')); ring.position.set(k.x, k.y + .8, k.z); this.root.add(ring);
-    this.fx.push({ mesh:ring, life:.6, max:.6, kind:'ring', r:24 });
+    this.snd('boom');
+    this.ring(k.x, k.y, k.z);
     for (const o of this.karts) if (o !== k && Math.hypot(o.x - k.x, o.z - k.z) < 24) this.hit(o, 'flip', k);
+  }
+  ring(x, y, z){
+    if (this.log) this.log.push(['r', +x.toFixed(1), +y.toFixed(1), +z.toFixed(1)]);
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(1, .35, 8, 40).rotateX(Math.PI / 2), emissive('#fff36b', 2.6)); ring.position.set(x, y + .8, z); this.root.add(ring);
+    this.fx.push({ mesh:ring, life:.6, max:.6, kind:'ring', r:24 });
   }
   warp(k){
     const t = this.track, jump = Math.round(t.N * .09);
@@ -335,9 +384,9 @@ export class Race {
     const ni = t.wrap(k.idx + jump), p = t.pos(ni, 0);
     k.x = p.x; k.z = p.z; k.y = p.y; k.idx = ni; k.prog += jump; k.h = t.heading(ni);
     const sp = Math.max(k.speed, MAX_SPEED * .8); k.vx = Math.sin(k.h) * sp; k.vz = Math.cos(k.h) * sp;
-    k.inv = 1.2; k.warped = true; k.camPos.set(k.x - Math.sin(k.h) * 10, k.y + 4.5, k.z - Math.cos(k.h) * 10);
+    k.inv = 1.2; k.warped = true; k.snap = true; k.drift = 0; k.skidAt = [null, null];
     this.burst(k.x, k.y + 1, k.z, '#c58bff', 14, 10);
-    if (k.pl.kind !== 'ai') Snd.play('warp');
+    this.snd('warp', k);
   }
   hit(k, type, by, soft){
     if (k.inv > 0 || k.fin) return;
@@ -345,9 +394,9 @@ export class Race {
     if (type === 'spin'){ k.spin = soft ? .9 : 1.2; }
     else { k.flip = 1.4; k.vx *= .3; k.vz *= .3; }
     k.inv = type === 'flip' ? 1.8 : 1.3; k.warped = false;
-    // bricks fly off the kart
-    this.burst(k.x, k.y + 1.2, k.z, k.pl.color, 8, 12, 'brick');
-    if (k.pl.kind !== 'ai'){ Snd.play('spin'); k.pl.notify({ e:'hit' }); }
+    // sparks fly off the kart
+    this.burst(k.x, k.y + 1.2, k.z, k.pl.color, 10, 12, 'shard'); k.drift = 0; k.dch = 0;
+    this.snd('spin', k); if (k.pl.kind !== 'ai') k.pl.notify({ e:'hit' });
   }
 
   /* ---------- kart to kart ---------- */
@@ -360,7 +409,7 @@ export class Race {
       a.x -= nx * push; a.z -= nz * push; b.x += nx * push; b.z += nz * push;
       const rv = (b.vx - a.vx) * nx + (b.vz - a.vz) * nz;
       if (rv < 0){ const imp = -rv * .8; a.vx -= nx * imp * .5; a.vz -= nz * imp * .5; b.vx += nx * imp * .5; b.vz += nz * imp * .5;
-        if (imp > 6 && (a.pl.kind !== 'ai' || b.pl.kind !== 'ai')) Snd.play('bump'); }
+        if (imp > 6) this.snd('bump', this.isLocal(a) ? a : b); }
       // spike shields spin out whoever they touch
       if (a.shield > 0 && a.shieldLvl >= 2 && !(b.shield > 0)) this.hit(b, 'spin', a);
       if (b.shield > 0 && b.shieldLvl >= 2 && !(a.shield > 0)) this.hit(a, 'spin', b);
@@ -375,27 +424,30 @@ export class Race {
     }
   }
 
-  /* ---------- effects: brick shards, puffs, rings and bolts ---------- */
+  /* ---------- effects: shards, puffs, rings and bolts ---------- */
   burst(x, y, z, color, n, speed, kind = 'shard'){
-    for (let i = 0; i < n; i++){
-      const m = new THREE.Mesh(kind === 'puff' ? Race.puffG : Race.shardG, kind === 'puff' ? toon('#ffffff') : toon(color));
-      m.position.set(x, y, z); const s = kind === 'puff' ? .5 + Math.random() * .5 : .6 + Math.random() * .5; m.scale.setScalar(s);
-      this.root.add(m);
-      const a = Math.random() * Math.PI * 2, up = kind === 'puff' ? 1 + Math.random() : 4 + Math.random() * 8;
-      this.fx.push({ mesh:m, kind, life:kind === 'puff' ? .5 : 1.1, max:kind === 'puff' ? .5 : 1.1, s,
-        v:new THREE.Vector3(Math.cos(a) * speed * Math.random(), up, Math.sin(a) * speed * Math.random()), r:new THREE.Vector3(Math.random() * 8, Math.random() * 8, 0) });
+    if (this.log) this.log.push(['f', +x.toFixed(1), +y.toFixed(1), +z.toFixed(1), color, n, speed, kind]);
+    const P = this.parts;
+    if (kind === 'puff'){
+      for (let i = 0; i < n; i++){ const a = Math.random() * Math.PI * 2, v = speed * Math.random();
+        P.add(x, y, z, Math.cos(a) * v, 1 + Math.random(), Math.sin(a) * v, .2 + Math.random() * .16, .45, '#fff6f0', 'puff'); }
+      return;
     }
+    // a pop: coloured shards, a few sparks and a soft puff
+    for (let i = 0; i < n; i++){ const a = Math.random() * Math.PI * 2, v = speed * (.3 + Math.random() * .7);
+      P.add(x, y, z, Math.cos(a) * v, 5 + Math.random() * 8, Math.sin(a) * v, .22 + Math.random() * .18, 1 + Math.random() * .4, color, 'shard'); }
+    for (let i = 0; i < Math.ceil(n * .8); i++){ const a = Math.random() * Math.PI * 2, v = speed * (.8 + Math.random());
+      P.add(x, y, z, Math.cos(a) * v, 3 + Math.random() * 6, Math.sin(a) * v, .1 + Math.random() * .06, .45 + Math.random() * .25, color, 'spark'); }
+    for (let i = 0; i < Math.ceil(n / 3); i++) P.add(x + (Math.random() - .5) * 1.5, y, z + (Math.random() - .5) * 1.5, (Math.random() - .5) * 3, 1.5, (Math.random() - .5) * 3, .4 + Math.random() * .3, .55, '#fff4f0', 'puff');
   }
   updateFx(dt){
+    this.parts.update(dt); this.skids.update(dt);
     for (const f of [...this.fx]){
       f.life -= dt; const k = Math.max(0, f.life / f.max);
-      if (f.kind === 'shard' || f.kind === 'brick'){ f.v.y -= 30 * dt; f.mesh.position.addScaledVector(f.v, dt); f.mesh.rotation.x += f.r.x * dt; f.mesh.rotation.y += f.r.y * dt; f.mesh.scale.setScalar(f.s * Math.min(1, k * 3)); }
-      else if (f.kind === 'puff'){ f.mesh.position.addScaledVector(f.v, dt); f.mesh.scale.setScalar(f.s * (1 + (1 - k) * 1.5) * k); }
-      else if (f.kind === 'ring'){ const r = 1 + (1 - k) * f.r; f.mesh.scale.set(r, 1, r); }
+      if (f.kind === 'ring'){ const r = 1 + (1 - k) * f.r; f.mesh.scale.set(r, 1 + k, r); }
       else if (f.kind === 'bolt'){ f.mesh.visible = Math.sin(f.life * 80) > -.3; }
-      if (f.life <= 0){ this.root.remove(f.mesh); if (f.kind === 'bolt' || f.kind === 'ring') f.mesh.geometry.dispose(); this.fx.splice(this.fx.indexOf(f), 1); }
+      if (f.life <= 0){ this.root.remove(f.mesh); f.mesh.geometry.dispose(); this.fx.splice(this.fx.indexOf(f), 1); }
     }
-    for (const fl of this.track.flags || []) fl.userData.cloth.rotation.y = Math.sin(this.time * 4 + fl.position.x) * .25;
   }
 
   rank(){
@@ -403,20 +455,160 @@ export class Race {
     order.forEach((k, i) => k.place = i + 1);
     this.order = order;
   }
+  /* ---------- cameras ----------
+     top  : a high telephoto view that swings slowly behind the kart and pulls back with speed
+     chase: low and close behind the kart */
   updateCam(k, dt){
-    const f = new THREE.Vector3(Math.sin(k.h), 0, Math.cos(k.h)), back = k.look > 0 ? -1 : 1;
-    const dist = 9.5 + Math.max(0, k.speed) * .05, wantP = new THREE.Vector3(k.x - f.x * dist * back, k.y + 4.2, k.z - f.z * dist * back);
-    const wantL = new THREE.Vector3(k.x + f.x * 6 * back, k.y + 1.4, k.z + f.z * 6 * back);
-    const a = 1 - Math.exp(-dt * (k.look > 0 ? 30 : 7));
-    k.camPos.lerp(wantP, a); k.camLook.lerp(wantL, 1 - Math.exp(-dt * 12));
-    k.cam.position.copy(k.camPos); k.cam.lookAt(k.camLook);
-    const fov = 68 + (k.boost > 0 ? 10 : 0) + Math.max(0, k.speed) * .1;
-    if (Math.abs(k.cam.fov - fov) > .05){ k.cam.fov += (fov - k.cam.fov) * Math.min(1, dt * 5); k.cam.updateProjectionMatrix(); }
+    const snap = k.snap; k.snap = false;
+    const cam = k.cam, aspect = cam.aspect || 1, back = k.look > 0;
+    const sp = Math.hypot(k.vx, k.vz), vh = sp > 6 ? Math.atan2(k.vx, k.vz) : k.h;
+    if (k.camMode === 'top'){
+      // heading the camera swings towards: mostly the kart's, a little of where it is actually going
+      const want = (back ? k.h + Math.PI : k.h + wrapPi(vh - k.h) * .4);
+      k.camYaw += wrapPi(want - k.camYaw) * (snap ? 1 : 1 - Math.exp(-dt * (back ? 9 : 2.2)));
+      // further out with speed and boost, and in tall, narrow views so the road ahead stays in sight
+      const wantD = (44 + Math.max(0, k.speed) * .36 + (k.boost > 0 ? 6 : 0)) * (aspect < 1 ? Math.pow(1 / aspect, .45) : 1);
+      k.camDist += (wantD - k.camDist) * (snap ? 1 : 1 - Math.exp(-dt * 1.6));
+      // look ahead of the kart along its velocity
+      const ahead = clamp(sp * .32, 0, 14) * (back ? -1 : 1);
+      const fx = Math.sin(vh) * ahead, fz = Math.cos(vh) * ahead;
+      const ty = k.y + 1;
+      const fa = snap ? 1 : 1 - Math.exp(-dt * 6);
+      k.focus.x += (k.x + fx - k.focus.x) * fa; k.focus.z += (k.z + fz - k.focus.z) * fa; k.focus.y += (ty - k.focus.y) * (snap ? 1 : 1 - Math.exp(-dt * 4));
+      const el = .72, d = k.camDist, h = Math.cos(el) * d;
+      k.camPos.set(k.focus.x - Math.sin(k.camYaw) * h, k.focus.y + Math.sin(el) * d, k.focus.z - Math.cos(k.camYaw) * h);
+      cam.position.copy(k.camPos); cam.lookAt(k.focus);
+      const fov = 30 + (k.boost > 0 ? 3 : 0);
+      if (Math.abs(cam.fov - fov) > .02){ cam.fov += (fov - cam.fov) * Math.min(1, dt * 4); cam.updateProjectionMatrix(); }
+      return;
+    }
+    const hi = k.camMode === 'high', f = new THREE.Vector3(Math.sin(k.h), 0, Math.cos(k.h)), s = back ? -1 : 1;
+    const dist = (hi ? 17 : 10.5) + Math.max(0, k.speed) * (hi ? .1 : .06), wantP = new THREE.Vector3(k.x - f.x * dist * s, k.y + (hi ? 10 : 4.6), k.z - f.z * dist * s);
+    const wantL = new THREE.Vector3(k.x + f.x * (hi ? 9 : 6) * s, k.y + 1.4, k.z + f.z * (hi ? 9 : 6) * s);
+    if (snap){ k.camPos.copy(wantP); k.camLook.copy(wantL); }
+    k.camPos.lerp(wantP, 1 - Math.exp(-dt * (back ? 30 : 7))); k.camLook.lerp(wantL, 1 - Math.exp(-dt * 12));
+    // never dip into the hillsides (the tunnel has its own roof)
+    if (!this.track.inSlot(k.camPos.x, k.camPos.z)){ const g = this.track.height(k.camPos.x, k.camPos.z) + 1.5; if (k.camPos.y < g) k.camPos.y = g; }
+    k.focus.copy(k.camLook);
+    cam.position.copy(k.camPos); cam.lookAt(k.camLook);
+    const fov = (hi ? 52 : 62) + (k.boost > 0 ? 10 : 0) + Math.max(0, k.speed) * .12;
+    if (Math.abs(cam.fov - fov) > .05){ cam.fov += (fov - cam.fov) * Math.min(1, dt * 5); cam.updateProjectionMatrix(); }
   }
+  // switch a player's camera to the next view
+  nextCam(k){ const c = Race.CAMS; k.camMode = c[(c.indexOf(k.camMode) + 1) % c.length]; k.snap = true; k.cam.fov = k.camMode === 'top' ? 30 : k.camMode === 'high' ? 52 : 62; k.cam.updateProjectionMatrix(); return k.camMode; }
   results(){
     return this.order.map(k => ({ name:k.pl.name, color:k.pl.color, kind:k.pl.kind, fin:k.fin, time:k.finT, place:k.place }));
   }
   onEvent(){ }
+
+  // sounds: played here for players on this screen, and logged for joiners online
+  isLocal(k){ return k.pl.kind !== 'ai' && k.pl.kind !== 'net'; }
+  snd(name, k){
+    if (!k || this.isLocal(k)) Snd.play(name);
+    if (this.log) this.log.push(['s', name, k ? k.pl.slot : -1]);
+  }
+
+  /* ---------- online: the host streams snapshots, joiners mirror them ---------- */
+  snapshot(){
+    const r = v => Math.round(v * 100) / 100;
+    return { rs:this.state, rt:r(this.raceTime),
+      k:this.karts.map(k => [r(k.x), r(k.y), r(k.z), r(k.h), r(k.vx), r(k.vz), r(k.spin), r(k.flip), r(k.boost), r(k.shield), k.shieldLvl, r(k.inv),
+        k.place, k.lapDone, k.fin ? 1 : 0, r(k.finT), k.pu ? KINDS.indexOf(k.pu) : -1, k.w, k.wrong ? 1 : 0, Math.round(k.prog), r(k.steer)]),
+      b:this.bricks.map(b => b.active ? b.color[0] : '-').join(''),
+      p:this.projectiles.map(p => [p.id, p.kind === 'cannon' ? 0 : 1, r(p.x), r(p.y), r(p.z), r(p.h)]),
+      h:this.hazards.map(h => [h.id, h.kind === 'oil' ? 0 : 1, r(h.x), r(h.z), r(h.mesh.position.y)]) };
+  }
+  // lat: seconds the snapshot is behind (about half the round trip)
+  applySnap(s, lat){
+    this.state = s.rs; this.netT = s.rt; this.netAt = performance.now();
+    const BC = { r:'red', y:'yellow', b:'blue', g:'green', w:'white' };
+    s.k.forEach((a, i) => {
+      const k = this.karts[i]; if (!k) return;
+      const [x, y, z, h, vx, vz] = a;
+      [k.spin, k.flip, k.boost, k.shield, k.shieldLvl, k.inv, k.place, k.lapDone] = a.slice(6, 14);
+      k.fin = !!a[14]; k.finT = a[15]; k.pu = a[16] >= 0 ? KINDS[a[16]] : null; k.w = a[17]; k.wrong = !!a[18]; k.prog = a[19];
+      if (k.local){
+        // our own kart is predicted here; pull it gently towards where the host has it
+        const ex = x + vx * lat, ez = z + vz * lat, err = Math.hypot(ex - k.x, ez - k.z);
+        if (err > 9){ k.x = ex; k.z = ez; k.h = h; k.vx = vx; k.vz = vz; }
+        else { k.x += (ex - k.x) * .2; k.z += (ez - k.z) * .2; k.h += wrapPi(h - k.h) * .2; }
+        if (k.flip > 0 || k.spin > 0){ k.vx = vx; k.vz = vz; }
+      } else { k.tgt = { x, y, z, h, vx, vz, at:performance.now(), steer:a[20] }; }
+    });
+    // bricks
+    s.b.split('').forEach((c, i) => { const b = this.bricks[i]; if (!b) return;
+      if (c === '-'){ if (b.active){ b.active = false; if (b.mesh){ this.root.remove(b.mesh); b.mesh = null; } } }
+      else if (!b.active || b.color !== BC[c]) this.spawnBrick(b, BC[c]); });
+    // projectiles and hazards, matched by id
+    const sync = (list, rows, make, place) => {
+      const seen = new Set(rows.map(r => r[0]));
+      for (const o of [...list]) if (!seen.has(o.id)){ this.root.remove(o.mesh); list.splice(list.indexOf(o), 1); }
+      for (const row of rows){ let o = list.find(o => o.id === row[0]); if (!o){ o = make(row); this.root.add(o.mesh); list.push(o); } place(o, row); }
+    };
+    sync(this.projectiles, s.p, r => ({ id:r[0], mesh:Race.projMesh(r[1] ? 'missile' : 'cannon'), x:r[2], y:r[3], z:r[4], h:r[5] }),
+      (o, r) => { o.tx = r[2]; o.ty = r[3]; o.tz = r[4]; o.th = r[5]; });
+    sync(this.hazards, s.h, r => ({ id:r[0], mesh:Race.hazardMesh(r[1] ? 'mine' : 'oil') }), (o, r) => o.mesh.position.set(r[2], r[4], r[3]));
+    this.order = [...this.karts].sort((a, b) => a.place - b.place);
+  }
+  // replay one logged effect from the host
+  replay(e){
+    if (e[0] === 'f') this.burst(e[1], e[2], e[3], e[4], e[5], e[6], e[7]);
+    else if (e[0] === 'l') this.bolt(e[1], e[2], e[3]);
+    else if (e[0] === 'r') this.ring(e[1], e[2], e[3]);
+  }
+  get clientTime(){ return this.netT == null ? 0 : this.netT + (this.state === 'race' || this.state === 'over' ? (performance.now() - this.netAt) / 1000 : 0); }
+  clientUpdate(dt){
+    this.time += dt;
+    const racing = this.state === 'race' || this.state === 'over';
+    for (const k of this.karts){
+      if (k.local){ this.drive(k, racing ? dt : 0, dt); continue; }
+      const g = k.tgt; if (!g) { k.ly = k.y; k.slope = 0; this.pose(k, dt); continue; }
+      // others: glide towards the host's position, run forward by their speed
+      const age = Math.min(.25, (performance.now() - g.at) / 1000), a = 1 - Math.exp(-dt * 12);
+      const prev = { x:k.x, z:k.z };
+      k.x += (g.x + g.vx * age - k.x) * a; k.z += (g.z + g.vz * age - k.z) * a; k.h += wrapPi(g.h - k.h) * a;
+      k.vx = g.vx; k.vz = g.vz; k.steer = g.steer;
+      k.speed = Math.hypot(k.x - prev.x, k.z - prev.z) / Math.max(dt, 1e-3) * Math.sign(g.vx * Math.sin(k.h) + g.vz * Math.cos(k.h) || 1);
+      const loc = this.track.locate(k.x, k.z, k.idx); k.idx = loc.i; k.ly = loc.y; k.slope = loc.slope;
+      this.pose(k, dt);
+    }
+    for (const p of this.projectiles){ if (p.tx == null) continue; const a = 1 - Math.exp(-dt * 15);
+      p.x += (p.tx - p.x) * a; p.y += (p.ty - p.y) * a; p.z += (p.tz - p.z) * a; p.h += wrapPi(p.th - p.h) * a; p.mesh.position.set(p.x, p.y, p.z); p.mesh.rotation.y = p.h; }
+    for (const h of this.hazards) if (h.mesh.userData.light) h.mesh.userData.light.visible = Math.sin(this.time * 12) > 0;
+    for (const b of this.bricks) if (b.active && b.mesh){ const u = b.mesh.userData; u.shell.rotation.y += dt * 2; u.ring.rotation.z -= dt * 1.4; u.ring.rotation.x = Math.PI / 2 + Math.sin(this.time * 2 + b.phase) * .25;
+      const bob = Math.sin(this.time * 3 + b.phase) * .3; b.mesh.position.y = b.pos.y + 1.6 + bob; u.shadow.position.y = -1.5 - bob; }
+    this.updateFx(dt);
+    for (const k of this.karts) if (k.local) this.updateCam(k, dt);
+  }
+  static projMesh(kind){
+    const mesh = new THREE.Group(), G = Race.geo;
+    if (kind === 'cannon'){
+      mesh.add(new THREE.Mesh(G.ball, stylize(COLORS.dark)));
+      const band = new THREE.Mesh(G.band, emissive('#ff7b3a', 2.2)); band.rotation.x = Math.PI / 2; mesh.add(band);
+    } else {
+      mesh.add(new THREE.Mesh(G.tube, stylize(COLORS.steel)));
+      const nose = new THREE.Mesh(G.nose, stylize(COLORS.red)); nose.position.z = 1.3; mesh.add(nose);
+      const fin = new THREE.Mesh(G.fin, stylize(COLORS.red)); fin.position.z = -.8; mesh.add(fin);
+      const jet = new THREE.Mesh(G.jet, emissive('#ffb347', 3)); jet.position.z = -1.25; mesh.add(jet);
+    }
+    for (const c of mesh.children) c.castShadow = true;
+    return mesh;
+  }
+  static hazardMesh(kind){
+    const G = Race.geo;
+    if (kind === 'oil'){ const m = new THREE.Mesh(G.oil, stylize('#1d1426', { drop:false, core:false })); m.scale.set(1, 1, .8); return m; }
+    const mesh = new THREE.Group(), dome = new THREE.Mesh(G.mine, stylize(COLORS.dark)); dome.castShadow = true; mesh.add(dome);
+    const l = new THREE.Mesh(G.mineLight, emissive(COLORS.red, 3)); l.position.y = .75; mesh.add(l); mesh.userData.light = l;
+    return mesh;
+  }
 }
-Race.shardG = new THREE.BoxGeometry(.8, .5, .8);
-Race.puffG = new THREE.SphereGeometry(.8, 8, 6);
+// camera views a player can cycle through while racing
+Race.CAMS = ['chase', 'high', 'top'];
+Race.defaultCam = 'chase';
+Race.geo = {
+  ball: new THREE.IcosahedronGeometry(.75, 2), band: new THREE.TorusGeometry(.76, .09, 6, 20),
+  tube: new THREE.CylinderGeometry(.35, .35, 2, 10).rotateX(Math.PI / 2), nose: new THREE.ConeGeometry(.35, .7, 10).rotateX(Math.PI / 2),
+  fin: new THREE.BoxGeometry(1.2, .1, .5), jet: new THREE.SphereGeometry(.3, 8, 6),
+  oil: new THREE.CircleGeometry(3, 24).rotateX(-Math.PI / 2), mine: new THREE.SphereGeometry(.8, 14, 8, 0, Math.PI * 2, 0, Math.PI / 2),
+  mineLight: new THREE.SphereGeometry(.25, 8, 6),
+};
