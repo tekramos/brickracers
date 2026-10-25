@@ -32,6 +32,8 @@ export class Race {
     this.root = new THREE.Group(); scene.add(this.root);
     this.time = 0; this.state = 'countdown'; this.count = 3.6; this.lastCount = 4; this.overT = 0;
     this.projectiles = []; this.hazards = []; this.fx = []; this.bricks = [];
+    // online: `log` collects effects and sounds for joiners (host), `client` mirrors the host's race (joiner)
+    this.nid = 0; this.log = null; this.client = false;
     this.karts = players.map((pl, i) => this.makeKart(pl, i));
     this.placeBricks();
   }
@@ -64,9 +66,9 @@ export class Race {
       }
     }
   }
-  spawnBrick(b){
+  spawnBrick(b, color){
     if (b.mesh) this.root.remove(b.mesh);
-    b.color = Math.random() < .3 ? 'white' : KINDS[Math.random() * 4 | 0];
+    b.color = color || (Math.random() < .3 ? 'white' : KINDS[Math.random() * 4 | 0]);
     b.mesh = brick(COLORS[b.color]); b.mesh.position.copy(b.pos); b.mesh.position.y += 1.4; this.root.add(b.mesh);
     const bl = new THREE.Mesh(new THREE.CircleGeometry(1.2, 16).rotateX(-Math.PI / 2), basic('#000000', { transparent:true, opacity:.22, depthWrite:false }));
     bl.position.y = -1.3; b.mesh.add(bl);
@@ -77,7 +79,7 @@ export class Race {
     this.burst(b.pos.x, b.pos.y + 1.4, b.pos.z, COLORS[b.color], 6, 8);
     if (b.color === 'white'){ if (k.w < 3) k.w++; }
     else k.pu = b.color;
-    if (k.pl.kind !== 'ai'){ Snd.play(b.color === 'white' ? 'white' : 'brick'); k.pl.notify({ e:'pick' }); }
+    this.snd(b.color === 'white' ? 'white' : 'brick', k); if (k.pl.kind !== 'ai') k.pl.notify({ e:'pick' });
     if (k.ai) k.ai.hold = .6 + Math.random() * 2.5;
   }
 
@@ -87,9 +89,9 @@ export class Race {
     if (this.state === 'countdown'){
       this.count -= dt;
       const c = Math.ceil(this.count - .6);
-      if (c < this.lastCount && c >= 1){ this.lastCount = c; Snd.play('count'); this.onEvent({ e:'count', n:c }); }
+      if (c < this.lastCount && c >= 1){ this.lastCount = c; this.snd('count'); this.onEvent({ e:'count', n:c }); }
       if (this.count <= .6){
-        this.state = 'race'; this.raceStart = this.time; Snd.play('go'); this.onEvent({ e:'go' });
+        this.state = 'race'; this.raceStart = this.time; this.snd('go'); this.onEvent({ e:'go' });
         // a rocket start for anyone holding the gas at GO
         for (const k of this.karts) if (k.pl.input.gas || k.ai) k.boost = k.ai ? .3 + Math.random() * .4 : .8;
       }
@@ -148,7 +150,7 @@ export class Race {
       k.x -= r.x * s * over; k.z -= r.z * s * over;
       const vn = (k.vx * r.x + k.vz * r.z) * s;
       if (vn > 0){ k.vx -= r.x * s * vn * 1.3; k.vz -= r.z * s * vn * 1.3; k.vx *= .97; k.vz *= .97;
-        if (vn > 7 && !k.bumpT){ k.bumpT = .4; if (k.pl.kind !== 'ai') Snd.play('bump'); this.burst(k.x + r.x * s * 1.5, loc.y + .8, k.z + r.z * s * 1.5, '#ffffff', 3, 4, 'puff'); } }
+        if (vn > 7 && !k.bumpT){ k.bumpT = .4; this.snd('bump', k); this.burst(k.x + r.x * s * 1.5, loc.y + .8, k.z + r.z * s * 1.5, '#ffffff', 3, 4, 'puff'); } }
       // turn the nose along the wall a little when scraping it
       const th = t.heading(loc.i), d = wrapPi(th - k.h); if (Math.abs(d) < 1.2 && vn > 0) k.h += d * Math.min(1, rdt * 2);
     }
@@ -156,22 +158,26 @@ export class Race {
     let d = loc.i - k.idx; const N = t.N; if (d > N / 2) d -= N; if (d < -N / 2) d += N;
     k.idx = loc.i; k.prog += d;
     const lapsDone = Math.floor(k.prog / N);
-    if (lapsDone > k.lapDone && !k.fin){
+    // laps and the finish are decided by the host only
+    if (lapsDone > k.lapDone && !k.fin && !this.client){
       k.lapDone = lapsDone;
-      if (lapsDone >= this.laps){ k.fin = true; k.finT = this.raceTime; if (k.pl.kind !== 'ai'){ Snd.play('finish'); k.pl.notify({ e:'finish' }); } }
-      else if (k.pl.kind !== 'ai'){ Snd.play('lap'); k.pl.notify({ e:'lap', txt: lapsDone === this.laps - 1 ? 'Final lap!' : 'Lap ' + (lapsDone + 1) }); }
+      if (lapsDone >= this.laps){ k.fin = true; k.finT = this.raceTime; this.snd('finish', k); if (k.pl.kind !== 'ai') k.pl.notify({ e:'finish' }); }
+      else { this.snd('lap', k); if (k.pl.kind !== 'ai') k.pl.notify({ e:'lap', txt: lapsDone === this.laps - 1 ? 'Final lap!' : 'Lap ' + (lapsDone + 1) }); }
     }
     // driving the wrong way?
     const tt = t.T[loc.i], spd = Math.hypot(k.vx, k.vz);
     if (spd > 4 && (k.vx * tt.x + k.vz * tt.z) / spd < -.4 && this.state === 'race') k.wrongT += rdt; else k.wrongT = 0;
     k.wrong = k.wrongT > 1.2;
-    k.speed = fwd;
-    // place the model
-    const m = k.mesh, flipH = k.flip > 0 ? Math.sin((1 - k.flip / 1.4) * Math.PI) * 5 : 0;
-    k.y += ((loc.y) - k.y) * Math.min(1, rdt * 12);
+    k.speed = fwd; k.ly = loc.y; k.slope = loc.slope;
+    this.pose(k, rdt);
+  }
+  // place the kart model from its state: position, tilt, wheels, driver, shield and flames
+  pose(k, rdt){
+    const m = k.mesh, fwd = k.speed, flipH = k.flip > 0 ? Math.sin((1 - k.flip / 1.4) * Math.PI) * 5 : 0;
+    k.y += (k.ly - k.y) * Math.min(1, rdt * 12);
     m.position.set(k.x, k.y + flipH, k.z);
     m.rotation.y = k.h;
-    m.rotation.x = -Math.atan2(loc.slope, 1) * .9;
+    m.rotation.x = -Math.atan2(k.slope, 1) * .9;
     const body = m.userData.body;
     body.rotation.z = -k.steer * Math.min(1, Math.abs(fwd) / MAX_SPEED) * .12;
     body.rotation.x = k.flip > 0 ? (1 - k.flip / 1.4) * Math.PI * 2 : 0;
@@ -226,33 +232,28 @@ export class Race {
   use(k){
     if (!k.pu || this.state !== 'race' && this.state !== 'over' || k.flip > 0) return false;
     const kind = k.pu, lv = k.w; k.pu = null; k.w = 0;
-    const human = k.pl.kind !== 'ai';
     if (kind === 'red'){
-      if (lv === 0){ this.fire(k, 'cannon', 0); human && Snd.play('cannon'); }
-      else if (lv < 3){ for (let i = 0; i < lv; i++) this.fire(k, 'missile', (i - (lv - 1) / 2) * .35, i); human && Snd.play('missile'); }
+      if (lv === 0){ this.fire(k, 'cannon', 0); this.snd('cannon', k); }
+      else if (lv < 3){ for (let i = 0; i < lv; i++) this.fire(k, 'missile', (i - (lv - 1) / 2) * .35, i); this.snd('missile', k); }
       else this.lightning(k);
     } else if (kind === 'yellow'){
       if (lv === 0) this.drop(k, 'oil', 0);
       else if (lv === 1) this.drop(k, 'mine', 0);
       else if (lv === 2) [-4, 0, 4].forEach(s => this.drop(k, 'mine', s));
       else this.shockwave(k);
-      human && Snd.play(lv === 0 ? 'oil' : 'bump');
+      this.snd(lv === 0 ? 'oil' : 'bump', k);
     } else if (kind === 'blue'){
-      k.shield = [3.5, 6, 8, 10][lv]; k.shieldLvl = lv; human && Snd.play('shield');
+      k.shield = [3.5, 6, 8, 10][lv]; k.shieldLvl = lv; this.snd('shield', k);
     } else if (kind === 'green'){
-      if (lv < 3){ k.boost = [1.2, 2, 3][lv]; human && Snd.play('turbo'); }
+      if (lv < 3){ k.boost = [1.2, 2, 3][lv]; this.snd('turbo', k); }
       else this.warp(k);
     }
     return true;
   }
   fire(k, kind, ang, n = 0){
     const f = new THREE.Vector3(Math.sin(k.h + ang), 0, Math.cos(k.h + ang));
-    const mesh = new THREE.Group();
-    if (kind === 'cannon'){ const b = new THREE.Mesh(new THREE.SphereGeometry(.7, 14, 10), toon(COLORS.black)); mesh.add(b); }
-    else { const b = new THREE.Mesh(new THREE.CylinderGeometry(.35, .35, 2, 10).rotateX(Math.PI / 2), toon(COLORS.white)); mesh.add(b);
-      const nose = new THREE.Mesh(new THREE.ConeGeometry(.35, .7, 10).rotateX(Math.PI / 2), toon(COLORS.red)); nose.position.z = 1.3; mesh.add(nose);
-      const fin = new THREE.Mesh(new THREE.BoxGeometry(1.2, .1, .5), toon(COLORS.red)); fin.position.z = -.8; mesh.add(fin); }
-    const p = { kind, mesh, owner:k, x:k.x + f.x * 3, z:k.z + f.z * 3, y:k.y + 1.2, h:k.h + ang, speed:kind === 'cannon' ? 75 : 62, life:kind === 'cannon' ? 2.5 : 5, idx:k.idx, target:null, delay:n * .15, trail:0 };
+    const mesh = Race.projMesh(kind);
+    const p = { id:++this.nid, kind, mesh, owner:k, x:k.x + f.x * 3, z:k.z + f.z * 3, y:k.y + 1.2, h:k.h + ang, speed:kind === 'cannon' ? 75 : 62, life:kind === 'cannon' ? 2.5 : 5, idx:k.idx, target:null, delay:n * .15, trail:0 };
     if (kind === 'missile'){
       // lock on to the n-th kart ahead
       const ahead = this.karts.filter(o => o !== k && o.prog > k.prog).sort((a, b) => a.prog - b.prog);
@@ -282,18 +283,15 @@ export class Race {
         if (k === p.owner && p.life > (p.kind === 'cannon' ? 2.2 : 4.6)) continue;
         if (Math.hypot(k.x - p.x, k.z - p.z) < KART_R + .9 && Math.abs(k.y - p.y) < 4){ this.hit(k, p.kind === 'cannon' ? 'spin' : 'flip', p.owner); done = true; break; }
       }
-      if (done){ this.root.remove(p.mesh); this.projectiles.splice(this.projectiles.indexOf(p), 1); this.burst(p.x, p.y, p.z, COLORS.orange, 8, 10); Snd.play('boom'); }
+      if (done){ this.root.remove(p.mesh); this.projectiles.splice(this.projectiles.indexOf(p), 1); this.burst(p.x, p.y, p.z, COLORS.orange, 8, 10); this.snd('boom'); }
     }
   }
   drop(k, kind, side){
     const t = this.track, f = new THREE.Vector3(Math.sin(k.h), 0, Math.cos(k.h)), r = t.R[k.idx];
     const x = k.x - f.x * 3.5 + r.x * side, z = k.z - f.z * 3.5 + r.z * side, loc = t.locate(x, z, k.idx);
-    let mesh;
-    if (kind === 'oil'){ mesh = new THREE.Mesh(new THREE.CircleGeometry(3, 20).rotateX(-Math.PI / 2), basic('#15121c')); mesh.position.set(x, loc.y + .12, z); mesh.scale.set(1, 1, .8); }
-    else { mesh = new THREE.Group(); const b = new THREE.Mesh(new THREE.SphereGeometry(.8, 14, 8, 0, Math.PI * 2, 0, Math.PI / 2), toon(COLORS.dark)); mesh.add(b);
-      const l = new THREE.Mesh(new THREE.SphereGeometry(.25, 8, 6), basic(COLORS.red)); l.position.y = .75; mesh.add(l); mesh.userData.light = l; mesh.position.set(x, loc.y + .1, z); }
+    const mesh = Race.hazardMesh(kind); mesh.position.set(x, loc.y + (kind === 'oil' ? .12 : .1), z);
     this.root.add(mesh);
-    this.hazards.push({ kind, mesh, x, z, owner:k, life:kind === 'oil' ? 18 : 30, arm:.6, hitBy:new Map() });
+    this.hazards.push({ id:++this.nid, kind, mesh, x, z, owner:k, life:kind === 'oil' ? 18 : 30, arm:.6, hitBy:new Map() });
   }
   updateHazards(dt){
     for (const h of [...this.hazards]){
@@ -304,18 +302,19 @@ export class Race {
         if (h.arm > 0 && k === h.owner) continue;
         const d = Math.hypot(k.x - h.x, k.z - h.z);
         if (h.kind === 'oil' && d < 3.2){ const last = h.hitBy.get(k) || -9; if (this.time - last > 2){ h.hitBy.set(k, this.time); this.hit(k, 'spin', h.owner, true); } }
-        if (h.kind === 'mine' && d < 2.4){ this.hit(k, 'flip', h.owner); gone = true; this.burst(h.x, .8, h.z, COLORS.orange, 10, 12); Snd.play('boom'); break; }
+        if (h.kind === 'mine' && d < 2.4){ this.hit(k, 'flip', h.owner); gone = true; this.burst(h.x, .8, h.z, COLORS.orange, 10, 12); this.snd('boom'); break; }
       }
       if (gone){ this.root.remove(h.mesh); this.hazards.splice(this.hazards.indexOf(h), 1); }
     }
   }
   lightning(k){
-    Snd.play('zap'); this.onEvent({ e:'flash', col:'#fff8a0' });
+    this.snd('zap'); this.onEvent({ e:'flash', col:'#fff8a0' });
     for (const o of this.karts) if (o !== k && o.prog > k.prog){
       this.bolt(o.x, o.y, o.z); this.hit(o, 'spin', k);
     }
   }
   bolt(x, y, z){
+    if (this.log) this.log.push(['l', +x.toFixed(1), +y.toFixed(1), +z.toFixed(1)]);
     const pts = []; let px = x, pz = z;
     for (let i = 0; i <= 10; i++){ pts.push(new THREE.Vector3(px, y + 40 - i * 4, pz)); px = x + (Math.random() - .5) * 3; pz = z + (Math.random() - .5) * 3; }
     pts[10].set(x, y + 1, z);
@@ -324,10 +323,14 @@ export class Race {
     this.fx.push({ mesh:m, life:.45, max:.45, kind:'bolt' });
   }
   shockwave(k){
-    Snd.play('boom');
-    const ring = new THREE.Mesh(new THREE.TorusGeometry(1, .35, 8, 40).rotateX(Math.PI / 2), basic('#fff36b')); ring.position.set(k.x, k.y + .8, k.z); this.root.add(ring);
-    this.fx.push({ mesh:ring, life:.6, max:.6, kind:'ring', r:24 });
+    this.snd('boom');
+    this.ring(k.x, k.y, k.z);
     for (const o of this.karts) if (o !== k && Math.hypot(o.x - k.x, o.z - k.z) < 24) this.hit(o, 'flip', k);
+  }
+  ring(x, y, z){
+    if (this.log) this.log.push(['r', +x.toFixed(1), +y.toFixed(1), +z.toFixed(1)]);
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(1, .35, 8, 40).rotateX(Math.PI / 2), basic('#fff36b')); ring.position.set(x, y + .8, z); this.root.add(ring);
+    this.fx.push({ mesh:ring, life:.6, max:.6, kind:'ring', r:24 });
   }
   warp(k){
     const t = this.track, jump = Math.round(t.N * .09);
@@ -337,7 +340,7 @@ export class Race {
     const sp = Math.max(k.speed, MAX_SPEED * .8); k.vx = Math.sin(k.h) * sp; k.vz = Math.cos(k.h) * sp;
     k.inv = 1.2; k.warped = true; k.camPos.set(k.x - Math.sin(k.h) * 10, k.y + 4.5, k.z - Math.cos(k.h) * 10);
     this.burst(k.x, k.y + 1, k.z, '#c58bff', 14, 10);
-    if (k.pl.kind !== 'ai') Snd.play('warp');
+    this.snd('warp', k);
   }
   hit(k, type, by, soft){
     if (k.inv > 0 || k.fin) return;
@@ -347,7 +350,7 @@ export class Race {
     k.inv = type === 'flip' ? 1.8 : 1.3; k.warped = false;
     // bricks fly off the kart
     this.burst(k.x, k.y + 1.2, k.z, k.pl.color, 8, 12, 'brick');
-    if (k.pl.kind !== 'ai'){ Snd.play('spin'); k.pl.notify({ e:'hit' }); }
+    this.snd('spin', k); if (k.pl.kind !== 'ai') k.pl.notify({ e:'hit' });
   }
 
   /* ---------- kart to kart ---------- */
@@ -360,7 +363,7 @@ export class Race {
       a.x -= nx * push; a.z -= nz * push; b.x += nx * push; b.z += nz * push;
       const rv = (b.vx - a.vx) * nx + (b.vz - a.vz) * nz;
       if (rv < 0){ const imp = -rv * .8; a.vx -= nx * imp * .5; a.vz -= nz * imp * .5; b.vx += nx * imp * .5; b.vz += nz * imp * .5;
-        if (imp > 6 && (a.pl.kind !== 'ai' || b.pl.kind !== 'ai')) Snd.play('bump'); }
+        if (imp > 6) this.snd('bump', this.isLocal(a) ? a : b); }
       // spike shields spin out whoever they touch
       if (a.shield > 0 && a.shieldLvl >= 2 && !(b.shield > 0)) this.hit(b, 'spin', a);
       if (b.shield > 0 && b.shieldLvl >= 2 && !(a.shield > 0)) this.hit(a, 'spin', b);
@@ -377,6 +380,7 @@ export class Race {
 
   /* ---------- effects: brick shards, puffs, rings and bolts ---------- */
   burst(x, y, z, color, n, speed, kind = 'shard'){
+    if (this.log) this.log.push(['f', +x.toFixed(1), +y.toFixed(1), +z.toFixed(1), color, n, speed, kind]);
     for (let i = 0; i < n; i++){
       const m = new THREE.Mesh(kind === 'puff' ? Race.puffG : Race.shardG, kind === 'puff' ? toon('#ffffff') : toon(color));
       m.position.set(x, y, z); const s = kind === 'puff' ? .5 + Math.random() * .5 : .6 + Math.random() * .5; m.scale.setScalar(s);
@@ -417,6 +421,99 @@ export class Race {
     return this.order.map(k => ({ name:k.pl.name, color:k.pl.color, kind:k.pl.kind, fin:k.fin, time:k.finT, place:k.place }));
   }
   onEvent(){ }
+
+  // sounds: played here for players on this screen, and logged for joiners online
+  isLocal(k){ return k.pl.kind !== 'ai' && k.pl.kind !== 'net'; }
+  snd(name, k){
+    if (!k || this.isLocal(k)) Snd.play(name);
+    if (this.log) this.log.push(['s', name, k ? k.pl.slot : -1]);
+  }
+
+  /* ---------- online: the host streams snapshots, joiners mirror them ---------- */
+  snapshot(){
+    const r = v => Math.round(v * 100) / 100;
+    return { rs:this.state, rt:r(this.raceTime),
+      k:this.karts.map(k => [r(k.x), r(k.y), r(k.z), r(k.h), r(k.vx), r(k.vz), r(k.spin), r(k.flip), r(k.boost), r(k.shield), k.shieldLvl, r(k.inv),
+        k.place, k.lapDone, k.fin ? 1 : 0, r(k.finT), k.pu ? KINDS.indexOf(k.pu) : -1, k.w, k.wrong ? 1 : 0, Math.round(k.prog), r(k.steer)]),
+      b:this.bricks.map(b => b.active ? b.color[0] : '-').join(''),
+      p:this.projectiles.map(p => [p.id, p.kind === 'cannon' ? 0 : 1, r(p.x), r(p.y), r(p.z), r(p.h)]),
+      h:this.hazards.map(h => [h.id, h.kind === 'oil' ? 0 : 1, r(h.x), r(h.z), r(h.mesh.position.y)]) };
+  }
+  // lat: seconds the snapshot is behind (about half the round trip)
+  applySnap(s, lat){
+    this.state = s.rs; this.netT = s.rt; this.netAt = performance.now();
+    const BC = { r:'red', y:'yellow', b:'blue', g:'green', w:'white' };
+    s.k.forEach((a, i) => {
+      const k = this.karts[i]; if (!k) return;
+      const [x, y, z, h, vx, vz] = a;
+      [k.spin, k.flip, k.boost, k.shield, k.shieldLvl, k.inv, k.place, k.lapDone] = a.slice(6, 14);
+      k.fin = !!a[14]; k.finT = a[15]; k.pu = a[16] >= 0 ? KINDS[a[16]] : null; k.w = a[17]; k.wrong = !!a[18]; k.prog = a[19];
+      if (k.local){
+        // our own kart is predicted here; pull it gently towards where the host has it
+        const ex = x + vx * lat, ez = z + vz * lat, err = Math.hypot(ex - k.x, ez - k.z);
+        if (err > 9){ k.x = ex; k.z = ez; k.h = h; k.vx = vx; k.vz = vz; }
+        else { k.x += (ex - k.x) * .2; k.z += (ez - k.z) * .2; k.h += wrapPi(h - k.h) * .2; }
+        if (k.flip > 0 || k.spin > 0){ k.vx = vx; k.vz = vz; }
+      } else { k.tgt = { x, y, z, h, vx, vz, at:performance.now(), steer:a[20] }; }
+    });
+    // bricks
+    s.b.split('').forEach((c, i) => { const b = this.bricks[i]; if (!b) return;
+      if (c === '-'){ if (b.active){ b.active = false; if (b.mesh){ this.root.remove(b.mesh); b.mesh = null; } } }
+      else if (!b.active || b.color !== BC[c]) this.spawnBrick(b, BC[c]); });
+    // projectiles and hazards, matched by id
+    const sync = (list, rows, make, place) => {
+      const seen = new Set(rows.map(r => r[0]));
+      for (const o of [...list]) if (!seen.has(o.id)){ this.root.remove(o.mesh); list.splice(list.indexOf(o), 1); }
+      for (const row of rows){ let o = list.find(o => o.id === row[0]); if (!o){ o = make(row); this.root.add(o.mesh); list.push(o); } place(o, row); }
+    };
+    sync(this.projectiles, s.p, r => ({ id:r[0], mesh:Race.projMesh(r[1] ? 'missile' : 'cannon'), x:r[2], y:r[3], z:r[4], h:r[5] }),
+      (o, r) => { o.tx = r[2]; o.ty = r[3]; o.tz = r[4]; o.th = r[5]; });
+    sync(this.hazards, s.h, r => ({ id:r[0], mesh:Race.hazardMesh(r[1] ? 'mine' : 'oil') }), (o, r) => o.mesh.position.set(r[2], r[4], r[3]));
+    this.order = [...this.karts].sort((a, b) => a.place - b.place);
+  }
+  // replay one logged effect from the host
+  replay(e){
+    if (e[0] === 'f') this.burst(e[1], e[2], e[3], e[4], e[5], e[6], e[7]);
+    else if (e[0] === 'l') this.bolt(e[1], e[2], e[3]);
+    else if (e[0] === 'r') this.ring(e[1], e[2], e[3]);
+  }
+  get clientTime(){ return this.netT == null ? 0 : this.netT + (this.state === 'race' || this.state === 'over' ? (performance.now() - this.netAt) / 1000 : 0); }
+  clientUpdate(dt){
+    this.time += dt;
+    const racing = this.state === 'race' || this.state === 'over';
+    for (const k of this.karts){
+      if (k.local){ this.drive(k, racing ? dt : 0, dt); continue; }
+      const g = k.tgt; if (!g) { k.ly = k.y; k.slope = 0; this.pose(k, dt); continue; }
+      // others: glide towards the host's position, run forward by their speed
+      const age = Math.min(.25, (performance.now() - g.at) / 1000), a = 1 - Math.exp(-dt * 12);
+      const prev = { x:k.x, z:k.z };
+      k.x += (g.x + g.vx * age - k.x) * a; k.z += (g.z + g.vz * age - k.z) * a; k.h += wrapPi(g.h - k.h) * a;
+      k.vx = g.vx; k.vz = g.vz; k.steer = g.steer;
+      k.speed = Math.hypot(k.x - prev.x, k.z - prev.z) / Math.max(dt, 1e-3) * Math.sign(g.vx * Math.sin(k.h) + g.vz * Math.cos(k.h) || 1);
+      const loc = this.track.locate(k.x, k.z, k.idx); k.idx = loc.i; k.ly = loc.y; k.slope = loc.slope;
+      this.pose(k, dt);
+    }
+    for (const p of this.projectiles){ if (p.tx == null) continue; const a = 1 - Math.exp(-dt * 15);
+      p.x += (p.tx - p.x) * a; p.y += (p.ty - p.y) * a; p.z += (p.tz - p.z) * a; p.h += wrapPi(p.th - p.h) * a; p.mesh.position.set(p.x, p.y, p.z); p.mesh.rotation.y = p.h; }
+    for (const h of this.hazards) if (h.mesh.userData.light) h.mesh.userData.light.visible = Math.sin(this.time * 12) > 0;
+    for (const b of this.bricks) if (b.active && b.mesh){ b.mesh.rotation.y += dt * 2; b.mesh.position.y = b.pos.y + 1.4 + Math.sin(this.time * 3 + b.phase) * .3; }
+    this.updateFx(dt);
+    for (const k of this.karts) if (k.local) this.updateCam(k, dt);
+  }
+  static projMesh(kind){
+    const mesh = new THREE.Group();
+    if (kind === 'cannon'){ mesh.add(new THREE.Mesh(new THREE.SphereGeometry(.7, 14, 10), toon(COLORS.black))); }
+    else { mesh.add(new THREE.Mesh(new THREE.CylinderGeometry(.35, .35, 2, 10).rotateX(Math.PI / 2), toon(COLORS.white)));
+      const nose = new THREE.Mesh(new THREE.ConeGeometry(.35, .7, 10).rotateX(Math.PI / 2), toon(COLORS.red)); nose.position.z = 1.3; mesh.add(nose);
+      const fin = new THREE.Mesh(new THREE.BoxGeometry(1.2, .1, .5), toon(COLORS.red)); fin.position.z = -.8; mesh.add(fin); }
+    return mesh;
+  }
+  static hazardMesh(kind){
+    if (kind === 'oil'){ const m = new THREE.Mesh(new THREE.CircleGeometry(3, 20).rotateX(-Math.PI / 2), basic('#15121c')); m.scale.set(1, 1, .8); return m; }
+    const mesh = new THREE.Group(); mesh.add(new THREE.Mesh(new THREE.SphereGeometry(.8, 14, 8, 0, Math.PI * 2, 0, Math.PI / 2), toon(COLORS.dark)));
+    const l = new THREE.Mesh(new THREE.SphereGeometry(.25, 8, 6), basic(COLORS.red)); l.position.y = .75; mesh.add(l); mesh.userData.light = l;
+    return mesh;
+  }
 }
 Race.shardG = new THREE.BoxGeometry(.8, .5, .8);
 Race.puffG = new THREE.SphereGeometry(.8, 8, 6);

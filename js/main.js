@@ -1,11 +1,16 @@
 /* ============================================================
-   Brick Racers: renderer, lobby, players (phones, keyboards, AI), split screen and HUD.
+   Brick Racers: renderer, lobby, players (phones, keyboards, AI, online), split screen and HUD.
+   Two ways to play together, mixed freely in one race:
+   - same screen: phones or keyboards, and the screen splits between those players
+   - online: friends open index.html?join=CODE on their own device and see their own kart full
+     screen (split only if two of them share that device). This browser is the host.
    ============================================================ */
 import * as THREE from 'three';
 import { Track } from './track.js';
 import { Race, PU, AI_NAMES } from './race.js';
 import { PLAYER_COLORS, basic } from './models.js';
 import { PadHost } from './padhost.js';
+import { NetHost, NetClient } from './net.js';
 import { Snd } from './audio.js';
 
 const $ = s => document.querySelector(s);
@@ -17,13 +22,17 @@ const opts = {
 };
 const ord = n => n + (['th', 'st', 'nd', 'rd'][(n % 100 - 20) % 10] || ['th', 'st', 'nd', 'rd'][n % 100] || 'th');
 const ordHtml = n => n + '<sup>' + (['th', 'st', 'nd', 'rd'][(n % 100 - 20) % 10] || ['th', 'st', 'nd', 'rd'][n % 100] || 'th') + '</sup>';
+const JOIN = (QS.get('join') || '').toUpperCase().replace(/[^A-Z]/g, '').slice(0, 4); // set on a joining device
 const fmt = t => { const m = Math.floor(t / 60), s = t - m * 60; return m + ':' + (s < 10 ? '0' : '') + s.toFixed(2); };
 
 let renderer, scene, track, race = null, demo = null, state = 'loading', overview, demoCam, demoIdx = 0, demoT = 0;
 const slots = new Array(5).fill(null);
 const pads = new PadHost();
+const net = new NetHost();      // host: devices joining online
+let client = null;              // joining device: the link to the host
+let netEvents = [], netEvId = 0, snapT = 0, raceId = 0, grid = [];
 const keys = new Set();
-window.BR = { slots, pads, get race(){ return race; }, get state(){ return state; } }; // handy for debugging
+window.BR = { slots, pads, net, get client(){ return client; }, get race(){ return race; }, get state(){ return state; } }; // handy for debugging
 
 /* ---------- boot ---------- */
 async function boot(){
@@ -58,11 +67,17 @@ async function boot(){
   demoCam = new THREE.PerspectiveCamera(60, 1, .3, 2000);
 
   addEventListener('resize', () => renderer.setSize(innerWidth, innerHeight));
-  setupInput(); setupLobby();
-  pads.onJoin = phoneJoin; pads.onLeave = phoneLeave; pads.onButton = (p, b) => { const s = slots.find(s => s && s.key === p.key); if (s) button(s, b); };
-  pads.onStatus = renderPadStatus;
-  pads.start();
-  toLobby();
+  setupInput();
+  if (JOIN) setupJoin();
+  else {
+    setupLobby();
+    pads.onJoin = phoneJoin; pads.onLeave = phoneLeave; pads.onButton = (p, b) => { const s = slots.find(s => s && s.key === p.key); if (s) button(s, b); };
+    pads.onStatus = (st, msg) => { if (st === 'waiting' && net.code !== pads.code) net.start(pads.code, pads.broker); renderPadStatus(st, msg); };
+    net.onJoin = netJoin; net.onLeave = netLeave; net.onChange = renderSlots;
+    net.onButton = (d, i, b) => { const s = slots.find(s => s && s.devKey === d.key && s.pi === i); if (s) button(s, b); };
+    pads.start();
+    toLobby();
+  }
   $('#loading').style.display = 'none';
   let last = performance.now();
   renderer.setAnimationLoop(() => { const now = performance.now(), dt = Math.min(.05, (now - last) / 1000); last = now; frame(dt); });
@@ -71,7 +86,11 @@ async function boot(){
 /* ---------- players ---------- */
 function mkSlot(i, kind){
   const s = { i, kind, name:'P' + (i + 1), color:PLAYER_COLORS[i], key:null, phone:null, kb:-1, connected:true, input:{ steer:0, gas:0, brake:0 } };
-  s.notify = e => { if (s.kind === 'phone' && s.key) pads.send(Object.assign({ t:'ev' }, e), s.key); if (e.e === 'hit') viewFlash(s); };
+  s.notify = e => {
+    if (s.kind === 'phone' && s.key) pads.send(Object.assign({ t:'ev' }, e), s.key);
+    if (s.kind === 'net') netEvent(['e', e, s.i]);
+    if (e.e === 'hit') viewFlash(s);
+  };
   return s;
 }
 function phoneJoin(p){
@@ -86,6 +105,24 @@ function phoneLeave(p){
   if (state === 'lobby' || state === 'results'){ slots[s.i] = null; Snd.play('leave'); }
   else { s.connected = false; s.phone = null; s.input.steer = s.input.gas = s.input.brake = 0; }
   renderSlots();
+}
+// a device joining online brings one or two players
+function netJoin(d){
+  const got = [];
+  d.names.forEach((n, pi) => {
+    let s = slots.find(s => s && s.devKey === d.key && s.pi === pi);
+    if (!s){ const i = slots.findIndex(x => !x); if (i < 0) return; s = slots[i] = mkSlot(i, 'net'); s.devKey = d.key; s.pi = pi; }
+    s.dev = d; s.name = n; s.connected = true; got.push(s.i);
+  });
+  if (got.length){ Snd.play('join'); renderSlots(); }
+  return got;
+}
+function netLeave(d){
+  for (const s of slots) if (s && s.devKey === d.key){
+    if (state === 'lobby' || state === 'results') slots[s.i] = null;
+    else { s.connected = false; s.dev = null; s.input.steer = s.input.gas = s.input.brake = 0; }
+  }
+  Snd.play('leave'); renderSlots();
 }
 function addKeyboard(){
   const used = slots.filter(s => s && s.kind === 'kb').map(s => s.kb), kb = [0, 1].find(n => !used.includes(n));
@@ -113,8 +150,12 @@ function setupInput(){
     if (e.repeat) return;
     keys.add(e.code);
     for (const s of slots) if (s && s.kind === 'kb' && KB[s.kb].f.includes(e.code)) button(s, 'fire');
-    if (e.code === 'Enter'){ if (state === 'lobby' || state === 'results') startRace(); else if (state === 'pause') resume(); }
-    if (e.code === 'Escape' || e.code === 'KeyP'){ if (state === 'race') pause(); else if (state === 'pause') resume(); }
+    if (JOIN){ if (e.code === 'Enter' && client) localPress(0, 1); if (['Space', 'KeyF'].includes(e.code)) localPress(e.code === 'KeyF' && locals.length > 1 ? 1 : 0, 0);
+      if (['ShiftLeft', 'ShiftRight', 'KeyR'].includes(e.code)) localPress(e.code === 'KeyR' && locals.length > 1 ? 1 : 0, 2); }
+    else {
+      if (e.code === 'Enter'){ if (state === 'lobby' || state === 'results') startRace(); else if (state === 'pause') resume(); }
+      if (e.code === 'Escape' || e.code === 'KeyP'){ if (state === 'race') pause(); else if (state === 'pause') resume(); }
+    }
     if (e.code === 'KeyM'){ Snd.toggleMusic(); renderOpts(); }
   });
   addEventListener('keyup', e => keys.delete(e.code));
@@ -128,6 +169,7 @@ function readInputs(){
     if (s.kind === 'kb'){ const m = KB[s.kb]; s.input.steer = (down(m.r) ? 1 : 0) - (down(m.l) ? 1 : 0); s.input.gas = down(m.g) ? 1 : 0; s.input.brake = down(m.b) ? 1 : 0;
       const k = kartOf(s); if (k && down(m.look)) k.look = Math.max(k.look, .12); }
     else if (s.phone){ s.input.steer = s.phone.steer; s.input.gas = s.phone.gas; s.input.brake = s.phone.brake; s.name = s.phone.name; }
+    else if (s.kind === 'net' && s.dev){ const p = s.dev.players[s.pi]; if (p){ s.input.steer = p.steer; s.input.gas = p.gas; s.input.brake = p.brake; } }
   }
 }
 
@@ -135,7 +177,9 @@ function readInputs(){
 function setupLobby(){
   $('#addkb').onclick = () => { Snd.play('select'); addKeyboard(); };
   $('#start').onclick = () => startRace();
-  $('#newcode').onclick = () => { Snd.play('select'); pads.newRoom(); renderSlots(); };
+  $('#newcode').onclick = () => { Snd.play('select'); net.stop(); pads.newRoom(); renderSlots(); };
+  $('#copyonline').onclick = async () => { Snd.play('select'); try { await navigator.clipboard.writeText(net.url); $('#copyonline').textContent = 'Copied!'; } catch (e) { prompt('Send this link to your friends:', net.url); }
+    setTimeout(() => $('#copyonline').textContent = 'Copy link', 1500); };
   $('#again').onclick = () => startRace();
   $('#tolobby').onclick = () => { Snd.play('back'); toLobby(); };
   $('#resume').onclick = () => resume();
@@ -165,10 +209,12 @@ function renderSlots(){
     const bk = document.createElement('div'); bk.className = 'bk'; d.append(bk);
     const nm = document.createElement('div'); nm.className = 'nm'; nm.textContent = s ? s.name : 'P' + (i + 1); d.append(nm);
     const how = document.createElement('div'); how.className = 'how';
-    how.textContent = !s ? (opts.ai ? 'AI racer' : 'open') : s.kind === 'kb' ? (s.kb ? 'WASD + F' : 'Arrows + Space') : s.connected ? (s.phone && s.phone.direct ? 'phone · direct' : 'phone') : 'phone (reconnecting)';
+    how.textContent = !s ? (opts.ai ? 'AI racer' : 'open') : s.kind === 'kb' ? (s.kb ? 'WASD + F' : 'Arrows + Space')
+      : s.kind === 'net' ? (s.connected ? (s.dev && s.dev.direct ? 'online · direct' : 'online') : 'online (reconnecting)')
+      : s.connected ? (s.phone && s.phone.direct ? 'phone · direct' : 'phone') : 'phone (reconnecting)';
     d.append(how);
     if (s){ const x = document.createElement('button'); x.className = 'x'; x.textContent = '×'; x.title = 'Remove';
-      x.onclick = () => { Snd.play('back'); if (s.kind === 'phone' && s.key) pads.drop(s.key); slots[i] = null; renderSlots(); }; d.append(x); }
+      x.onclick = () => { Snd.play('back'); if (s.kind === 'phone' && s.key) pads.drop(s.key); if (s.kind === 'net') net.drop(s.devKey, true); slots[i] = null; renderSlots(); }; d.append(x); }
     el.append(d);
   });
   $('#start').disabled = !slots.some(s => s);
@@ -182,6 +228,9 @@ function renderPadStatus(s, msg){
   if (svg && q.dataset.u !== pads.url){ q.innerHTML = svg; q.dataset.u = pads.url; }
   else if (!svg && pads.code && !pads.url) q.textContent = 'Open the game from its web address to get a scannable code.';
   $('#padurl').textContent = pads.url ? pads.url.replace(/^https?:\/\//, '') : '';
+  const ou = net.url || (pads.code ? '' : '');
+  $('#onlineurl').textContent = ou ? ou.replace(/^https?:\/\//, '') : (pads.code ? 'Open the game from its web address to invite friends online.' : '…');
+  $('#copyonline').disabled = !ou;
   renderSlots();
 }
 
@@ -213,10 +262,11 @@ function startRace(){
   // shuffle the starting grid
   for (let i = players.length - 1; i > 0; i--){ const j = Math.random() * (i + 1) | 0; [players[i], players[j]] = [players[j], players[i]]; }
   race = new Race(scene, track, players, opts.laps);
+  race.log = []; raceId++; grid = players.map(p => [p.slot, p.kind === 'ai' ? 'ai' : 'p', p.name, p.color]);
   // markers above each kart for the overview camera only
   for (const k of race.karts){ const m = new THREE.Mesh(new THREE.ConeGeometry(7, 14, 4).rotateX(Math.PI), basic(k.pl.color)); m.position.y = 18; m.layers.set(1); k.mesh.add(m); }
   race.onEvent = e => {
-    pads.send(Object.assign({ t:'ev' }, e));
+    pads.send(Object.assign({ t:'ev' }, e)); netEvent(['e', e, -1]);
     if (e.e === 'count') big(e.n); if (e.e === 'go') big('GO!');
     if (e.e === 'flash') gflash(e.col);
   };
@@ -227,10 +277,10 @@ function startRace(){
 }
 function pause(){ state = 'pause'; $('#pause').classList.remove('hidden'); Snd.play('back'); }
 function resume(){ state = 'race'; $('#pause').classList.add('hidden'); Snd.play('select'); }
-function showResults(){
-  state = 'results';
+function showResults(){ state = 'results'; showResultsList(race.results()); }
+function showResultsList(list){
   const tb = $('#restab'); tb.innerHTML = '';
-  for (const r of race.results()){
+  for (const r of list){
     const tr = document.createElement('tr'); if (r.kind === 'ai') tr.className = 'ai';
     const a = document.createElement('td'); a.textContent = ord(r.place);
     const b = document.createElement('td'); const i = document.createElement('i'); i.style.setProperty('--c', r.color); b.append(i, r.name + (r.kind === 'ai' ? ' (AI)' : ''));
@@ -248,9 +298,15 @@ function layout(n){
   const t = 1 / 3; return { views:[[0, 0, t, .5], [t, 0, t, .5], [2 * t, 0, t, .5], [0, .5, t, .5], [t, .5, t, .5]], spare:[2 * t, .5, t, .5] };
 }
 let hud = [], mini = null, standings = null;
+// the karts that get a view on this screen: players sitting here (online players have their own screens)
+function screenKarts(){
+  if (!race) return [];
+  const mine = race.client ? race.karts.filter(k => k.local) : race.karts.filter(k => race.isLocal(k));
+  return mine;
+}
 function buildHud(){
   const el = $('#hud'); el.innerHTML = ''; hud = [];
-  const humans = race.karts.filter(k => k.pl.kind !== 'ai'), L = layout(humans.length);
+  const humans = screenKarts(), L = humans.length ? layout(humans.length) : { views:[], spare:[0, 0, 1, 1] };
   humans.forEach((k, i) => {
     const [x, y, w, h] = L.views[i], v = document.createElement('div'); v.className = 'view';
     Object.assign(v.style, { left:x * 100 + '%', top:y * 100 + '%', width:w * 100 + '%', height:h * 100 + '%' });
@@ -309,7 +365,7 @@ function updateHud(){
     const html = race.order.map(k => `<div style="--c:${k.pl.color}"><b>${k.place}</b><i></i>${k.pl.name.replace(/</g, '&lt;')}</div>`).join('');
     if (standings.dataset.h !== html){ standings.dataset.h = html; standings.innerHTML = html; }
   }
-  $('#timer').textContent = fmt(race.raceTime);
+  $('#timer').textContent = fmt(race.client ? race.clientTime : race.raceTime);
   drawMini();
 }
 function viewFlash(s){ const h = hud.find(h => h.k.pl.slot === s.i); if (!h) return; const f = h.flash; f.style.transition = 'none'; f.style.opacity = .45; void f.offsetWidth; f.style.transition = 'opacity .5s'; f.style.opacity = 0; }
@@ -337,8 +393,11 @@ const view = (cam, x, y, w, h) => {
   renderer.render(scene, cam);
 };
 function frame(dt){
-  pads.tick(); readInputs(); feed(dt);
-  if (state === 'lobby' && demo){
+  if (!JOIN){ pads.tick(); readInputs(); feed(dt); } else readLocal();
+  if (JOIN) client && sendLocal(dt);
+  else net.tick();
+  if ((state === 'lobby' || JOIN && !race) && demo){
+    if (!JOIN) hostSnap(dt);
     demo.update(dt); demoT += dt;
     if (demoT > 9){ demoT = 0; demoIdx = (demoIdx + 1) % demo.karts.length; }
     if (demo.time > 150) startDemo();
@@ -351,18 +410,147 @@ function frame(dt){
     renderer.setScissorTest(false); view(demoCam, 0, 0, 1, 1);
     return;
   }
-  if (!race) return;
+  if (JOIN){ joinFrame(dt); return; }
+  if (!race){ hostSnap(dt); return; }
   if (state === 'race'){ race.update(dt); if (race.state === 'done') showResults(); }
   else if (state === 'results') race.update(dt); // karts cruise on behind the results
-  const humans = race.karts.filter(k => k.pl.kind !== 'ai');
+  hostSnap(dt);
+  renderRace();
+}
+function renderRace(){
+  const humans = screenKarts();
   const sp = humans.length ? Math.max(...humans.map(k => Math.abs(k.speed))) / 40 : 0;
   Snd.engine(sp, state === 'race' || state === 'results');
   updateHud();
-  const L = layout(humans.length);
   renderer.setScissorTest(true);
+  // nobody plays on this screen (everyone is online): watch the leader
+  if (!humans.length){ const lead = (race.order || race.karts)[0]; view(lead.cam, 0, 0, 1, 1); renderer.setScissorTest(false); return; }
+  const L = layout(humans.length);
   humans.forEach((k, i) => view(k.cam, ...L.views[i]));
   if (L.spare){ const fog = scene.fog; scene.fog = null; view(overview, ...L.spare); scene.fog = fog; }
   renderer.setScissorTest(false);
+}
+
+/* ---------- online: host side ---------- */
+function netEvent(d){ netEvents.push({ id:++netEvId, at:performance.now(), d }); }
+// stream the race to joined devices: 20 snapshots a second (4 in the lobby)
+function hostSnap(dt){
+  if (!net.devices.size){ netEvents.length = 0; if (race && race.log) race.log.length = 0; return; }
+  if (race && race.log){ for (const e of race.log) netEvent(e); race.log.length = 0; }
+  snapT -= dt; if (snapT > 0) return; snapT = state === 'lobby' ? .25 : .05;
+  const now = performance.now(); netEvents = netEvents.filter(e => now - e.at < 700);
+  const roster = slots.map(s => s && [s.i, s.name, s.color, s.kind === 'net' ? 'online' : s.kind]).filter(Boolean);
+  const o = { t:'snap', st:state, roster, ai:opts.ai, laps:opts.laps, ev:netEvents.map(e => [e.id, e.d]) };
+  if (race && state !== 'lobby'){ Object.assign(o, race.snapshot(), { sid:raceId, grid, laps:race.laps }); if (state === 'results') o.res = race.results(); }
+  net.snap(o);
+}
+
+/* ---------- online: joining device ---------- */
+const locals = [];   // players on this device: { name, input, cnt:[fire,start,look] }
+let lastEv = 0, joinSid = 0, sendT = 0, lastSentJ = '', lastSentT = 0, touch = null;
+const PADMAP = gp => gp && { steer: Math.abs(gp.axes[0] || 0) > .15 ? gp.axes[0] : (gp.buttons[15] && gp.buttons[15].pressed ? 1 : 0) - (gp.buttons[14] && gp.buttons[14].pressed ? 1 : 0),
+  gas: (gp.buttons[0] && gp.buttons[0].pressed) || (gp.buttons[7] && gp.buttons[7].value > .3) ? 1 : 0, brake: (gp.buttons[1] && gp.buttons[1].pressed) || (gp.buttons[6] && gp.buttons[6].value > .3) ? 1 : 0,
+  fire: gp.buttons[2] && gp.buttons[2].pressed || gp.buttons[5] && gp.buttons[5].pressed, look: gp.buttons[3] && gp.buttons[3].pressed, start: gp.buttons[9] && gp.buttons[9].pressed };
+function setupJoin(){
+  $('#lobby').classList.add('hidden'); $('#joinui').classList.remove('hidden');
+  $('#jcode').textContent = JOIN; $('#jcode2').textContent = JOIN; $('#jname').value = store.get('br-name') || '';
+  $('#jtwo').onchange = () => $('#jname2').classList.toggle('hidden', !$('#jtwo').checked);
+  $('#jgo').onclick = () => {
+    const n1 = $('#jname').value.trim().slice(0, 12), n2 = $('#jname2').value.trim().slice(0, 12);
+    if (!n1){ $('#jname').focus(); return; }
+    store.set('br-name', n1); Snd.init(); Snd.play('select');
+    const names = [n1]; if ($('#jtwo').checked) names.push(n2 || 'Player 2');
+    locals.length = 0; names.forEach(n => locals.push({ name:n, input:{ steer:0, gas:0, brake:0 }, cnt:[0, 0, 0], gp:{} }));
+    client = new NetClient(JOIN, names);
+    client.onStatus = joinStatus; client.onSnap = onSnap;
+    client.start(); $('#jform').classList.add('hidden'); $('#jwait').classList.remove('hidden'); joinStatus('connecting');
+  };
+  $('#jform').addEventListener('keydown', e => { if (e.key === 'Enter') $('#jgo').click(); });
+  $('#jstart').onclick = () => localPress(0, 1);
+  $('#again').onclick = () => localPress(0, 1);
+  $('#tolobby').textContent = 'LEAVE'; $('#tolobby').onclick = () => { if (client) client.leave(); location.href = location.pathname; };
+  $('#resume').onclick = () => localPress(0, 1); $('#quit').classList.add('hidden');
+  if ('ontouchstart' in window) setupTouch();
+  startDemo(); state = 'lobby'; Snd.music(true);
+}
+function joinStatus(st){
+  const msg = { connecting:'Connecting to race ' + JOIN + '…', joined:'You are in! Waiting for the host to start the race.', full:'This race is full (5 players).',
+    removed:'The host removed you from the race.', lost:'Lost the host. Reconnecting…', error:'Could not reach the internet.' }[st] || st;
+  $('#jst').textContent = msg + (client && client.slots.length ? (client.direct ? '  (direct link' : '  (relay') + (client.ping ? ', ' + client.ping + ' ms)' : ')') : '');
+}
+function localPress(i, b){ const p = locals[i]; if (!p) return; p.cnt[b]++; sendT = 0; lastSentJ = ''; }
+// joining device controls: keyboard (arrows or WASD), gamepads and touch buttons
+function readLocal(){
+  const pads2 = navigator.getGamepads ? [...navigator.getGamepads()].filter(Boolean) : [];
+  locals.forEach((p, i) => {
+    const kbs = locals.length > 1 ? [KB[i]] : KB, inp = p.input;
+    let steer = 0, gas = 0, brake = 0;
+    for (const m of kbs){ steer += (down(m.r) ? 1 : 0) - (down(m.l) ? 1 : 0); gas = gas || down(m.g); brake = brake || down(m.b); }
+    const g = PADMAP(pads2[i]);
+    if (g){ steer += g.steer; gas = gas || g.gas; brake = brake || g.brake;
+      for (const [k, b] of [['fire', 0], ['start', 1], ['look', 2]]){ if (g[k] && !p.gp[k]) localPress(i, b); p.gp[k] = g[k]; } }
+    if (i === 0 && touch){ steer += touch.steer; gas = gas || touch.gas; brake = brake || touch.brake; }
+    inp.steer = Math.max(-1, Math.min(1, steer)); inp.gas = gas ? 1 : 0; inp.brake = brake ? 1 : 0;
+    const k = race && race.karts.find(k => k.local && k.pl.slot === (client.slots[i])); if (k && (kbs.some(m => down(m.look)) || g && g.look)) k.look = Math.max(k.look, .12);
+  });
+}
+// send the inputs when they change (at most 30 a second), plus a heartbeat
+function sendLocal(dt){
+  sendT -= dt; if (sendT > 0) return;
+  const r2 = v => Math.round(v * 100) / 100, p = locals.map(l => [r2(l.input.steer), l.input.gas, l.input.brake, l.cnt.slice()]), j = JSON.stringify(p), t = performance.now();
+  if (j === lastSentJ && t - lastSentT < 150) return;
+  sendT = 1 / 30; lastSentJ = j; lastSentT = t; client.input(p);
+}
+function onSnap(s){
+  if (!client.slots.length) return;
+  $('#jroster').innerHTML = '';
+  for (const [i, n, c, kind] of s.roster || []){
+    const d = document.createElement('div'); d.style.setProperty('--c', c); const b = document.createElement('i'); d.append(b, n + (client.slots.includes(i) ? ' (you)' : '') + ' · ' + kind); $('#jroster').append(d);
+  }
+  if (s.st === 'lobby' || !s.k){
+    if (race){ race.dispose(); race = null; ['#hud', '#timer', '#results', '#pause', '#touch'].forEach(x => $(x).classList.add('hidden')); $('#joinui').classList.remove('hidden'); startDemo(); }
+    lastEv = Math.max(lastEv, ...(s.ev || []).map(e => e[0]), 0); joinStatus(client.status); return;
+  }
+  // a new race: build the same grid as the host
+  if (!race || s.sid !== joinSid){
+    if (race) race.dispose(); if (demo){ demo.dispose(); demo = null; }
+    joinSid = s.sid;
+    const players = s.grid.map(([slot, kind, name, color]) => {
+      const li = client.slots.indexOf(slot);
+      return li >= 0 ? { slot, kind:'kb', name, color, input:locals[li].input, notify(){} } : { slot, kind: kind === 'ai' ? 'ai' : 'net', name, color, input:{}, notify(){} };
+    });
+    race = new Race(scene, track, players, s.laps); race.client = true;
+    for (const k of race.karts){ k.local = client.slots.includes(k.pl.slot); if (k.ai) k.ai = null; }
+    $('#joinui').classList.add('hidden'); $('#hud').classList.remove('hidden'); $('#timer').classList.remove('hidden');
+    buildHud(); state = 'race';
+  }
+  race.applySnap(s, Math.min(.2, (client.ping || 60) / 2000 + .02));
+  for (const [id, e] of s.ev || []){
+    if (id <= lastEv) continue; lastEv = id;
+    if (e[0] === 's'){ const mine = client.slots.includes(e[2]); if (e[2] === -1 || mine && e[1] !== 'bump') Snd.play(e[1]); }
+    else if (e[0] === 'e'){ const ev = e[1], mine = e[2] === -1 || client.slots.includes(e[2]); if (!mine) continue;
+      if (ev.e === 'count') big(ev.n); if (ev.e === 'go') big('GO!'); if (ev.e === 'flash') gflash(ev.col);
+      if (ev.e === 'hit') viewFlash({ i:e[2] }); }
+    else race.replay(e);
+  }
+  $('#pause').classList.toggle('hidden', s.st !== 'pause');
+  if (s.st === 'results' && s.res && state !== 'results'){ state = 'results'; showResultsList(s.res); }
+  if (s.st !== 'results' && state === 'results'){ state = 'race'; $('#results').classList.add('hidden'); }
+}
+function joinFrame(dt){
+  if (!race){ return; }
+  race.clientUpdate(dt);
+  if (touch) $('#touch').classList.remove('hidden');
+  renderRace();
+}
+function setupTouch(){
+  touch = { steer:0, gas:0, brake:0 };
+  const hold = (id, f) => { const b = $(id);
+    b.addEventListener('touchstart', e => { e.preventDefault(); b.classList.add('on'); f(1); }, { passive:false });
+    const up = e => { e.preventDefault(); b.classList.remove('on'); f(0); }; b.addEventListener('touchend', up); b.addEventListener('touchcancel', up); };
+  hold('#tl', v => touch.steer = v ? -1 : 0); hold('#tr', v => touch.steer = v ? 1 : 0);
+  hold('#tgas', v => touch.gas = v); hold('#tbrake', v => touch.brake = v);
+  hold('#tfire', v => { if (v) localPress(0, 0); });
 }
 
 boot().catch(e => { console.error(e); const el = $('#loading .err'); if (el) el.textContent = 'Could not start the 3D renderer: ' + (e && e.message || e) + '. Try another browser, or add ?webgl to the address.'; });

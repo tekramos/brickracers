@@ -41,6 +41,25 @@ button{font-family:var(--disp);cursor:pointer}
 #code{font:56px/1 var(--disp);letter-spacing:.14em;margin:4px 0 8px}
 #joincard ol{margin:0 0 8px;padding-left:18px;font-size:14px;line-height:1.45;font-weight:700;opacity:.92}
 #padst{font-size:13px;color:#ffe46b;min-height:18px}#padst.ok{color:#8dffb0}#padst.err{color:#ff8a8a}
+#joincard .online{margin-top:10px;font-size:12px;font-weight:700;line-height:1.4;opacity:.92}
+#joincard .online b{font:13px var(--disp);letter-spacing:.05em;color:var(--yellow)}
+#onlineurl{font-size:12px;color:#8dffb0;word-break:break-all;margin-top:2px}
+/* joining device */
+#joinui{position:fixed;inset:0;overflow:auto;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;padding:18px 16px;background:linear-gradient(rgba(20,40,110,.5),rgba(20,40,110,.25) 40%,rgba(20,40,110,.6));z-index:30}
+#joinui .card{width:min(520px,100%);text-align:center;display:flex;flex-direction:column;gap:12px;align-items:center}
+#joinui h3{margin:0;font:18px var(--disp);letter-spacing:.06em;color:var(--yellow)}
+#jcode{font:48px/1 var(--disp);letter-spacing:.14em}
+#joinui input[type=text]{font:22px var(--disp);text-align:center;padding:10px 14px;border-radius:14px;border:3px solid #fff;background:#fff;color:var(--ink);width:min(300px,90%)}
+#joinui label{font-size:14px;font-weight:700;display:flex;gap:8px;align-items:center;cursor:pointer}
+#jst{font-size:15px;color:#8dffb0;min-height:20px}
+#jroster{display:flex;flex-direction:column;gap:6px;font:18px var(--disp);text-align:left}
+#jroster i{display:inline-block;width:16px;height:16px;border-radius:4px;background:var(--c);margin-right:8px;vertical-align:-2px}
+/* touch controls on a joining phone or tablet */
+#touch{position:fixed;inset:auto 0 0 0;height:46%;pointer-events:none;z-index:25}
+#touch .tb{position:absolute;bottom:max(14px,env(safe-area-inset-bottom));pointer-events:auto;border-radius:20px;display:flex;align-items:center;justify-content:center;font:22px var(--disp);color:#fff;background:rgba(10,16,40,.45);border:3px solid rgba(255,255,255,.55);-webkit-user-select:none;user-select:none;touch-action:none}
+#touch .tb.on{background:rgba(255,255,255,.35)}
+#tl{left:14px;width:84px;height:84px}#tr{left:110px;width:84px;height:84px}
+#tgas{right:14px;width:110px;height:110px;background:rgba(47,178,76,.6)!important}#tbrake{right:136px;width:76px;height:76px}#tfire{right:14px;bottom:140px!important;width:110px;height:64px;background:rgba(227,36,43,.55)!important}
 #padurl{font-size:11px;opacity:.55;word-break:break-all;margin-top:4px;font-weight:700}
 #slots{flex:1 1 440px;background:var(--card);border-radius:20px;padding:14px;box-shadow:0 0 0 3px rgba(255,255,255,.12),0 14px 40px rgba(0,0,0,.35);display:grid;grid-template-columns:repeat(5,1fr);gap:10px;align-content:center}
 .slot{border-radius:16px;padding:12px 8px;text-align:center;background:rgba(255,255,255,.08);border:3px dashed rgba(255,255,255,.25);min-height:150px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;position:relative}
@@ -122,7 +141,8 @@ button{font-family:var(--disp);cursor:pointer}
         <div id="code">····</div>
         <ol><li>Scan the QR code with your phone camera.</li><li>Type your name and tap Join.</li><li>Turn the phone sideways and press START.</li></ol>
         <div id="padst"></div><div id="padurl"></div>
-        <div class="acts" style="justify-content:flex-start;margin-top:8px"><button class="bb sm gray" id="newcode">New code</button></div>
+        <div class="online"><b>FRIENDS AT HOME</b> can join online from their own device with this link:<div id="onlineurl">…</div></div>
+        <div class="acts" style="justify-content:flex-start;margin-top:8px"><button class="bb sm" id="copyonline" disabled>Copy link</button><button class="bb sm gray" id="newcode">New code</button></div>
       </div>
     </div>
     <div id="slots"></div>
@@ -141,6 +161,19 @@ button{font-family:var(--disp);cursor:pointer}
   <div class="help">Phones: slide to steer (or turn on tilt), hold GAS, tap the brick button to use your power-up.<br>
     Keyboard: player 1 arrows + Space (fire) + Shift (look back) · player 2 WASD + F (fire) + R (look back) · Enter starts · Esc pauses · M music</div>
 </div>
+
+<div id="joinui" class="hidden">
+  <h1 class="logo" aria-label="Brick Racers" style="font-size:clamp(36px,6vw,72px)"><span style="background:var(--red);--r:-3deg">B</span><span style="background:var(--yellow);color:#141a2e;--r:2deg">R</span><span style="background:var(--blue);--r:-1deg">I</span><span style="background:var(--green);--r:3deg">C</span><span style="background:var(--red);--r:-2deg">K</span><span class="gap"></span><span style="background:var(--blue);--r:2deg">R</span><span style="background:var(--yellow);color:#141a2e;--r:-3deg">A</span><span style="background:var(--green);--r:1deg">C</span><span style="background:var(--red);--r:-2deg">E</span><span style="background:var(--blue);--r:3deg">R</span><span style="background:var(--yellow);color:#141a2e;--r:-1deg">S</span></h1>
+  <div class="card" id="jform"><h3>JOIN ONLINE RACE</h3><div id="jcode">····</div>
+    <input type="text" id="jname" maxlength="12" placeholder="Your name" autocomplete="nickname">
+    <label><input type="checkbox" id="jtwo"> A second player on this screen</label>
+    <input type="text" id="jname2" class="hidden" maxlength="12" placeholder="Player 2 name">
+    <button class="bb go" id="jgo">JOIN RACE</button></div>
+  <div class="card hidden" id="jwait"><h3>RACE <span id="jcode2"></span></h3><div id="jst"></div><div id="jroster"></div>
+    <button class="bb go" id="jstart">START</button>
+    <div class="help">Arrows (or WASD) drive, Space fires your power-up, Shift looks back. Gamepads work too.<br>Two players here: player 1 arrows + Space, player 2 WASD + F. Anyone can press START when everyone is in.</div></div>
+</div>
+<div id="touch" class="hidden"><div class="tb" id="tl">◀</div><div class="tb" id="tr">▶</div><div class="tb" id="tbrake">BRAKE</div><div class="tb" id="tgas">GAS</div><div class="tb" id="tfire">FIRE</div></div>
 
 <div class="ov hidden" id="results"><div class="card"><h2>RESULTS</h2><table id="restab"></table>
   <div class="acts"><button class="bb go" id="again">RACE AGAIN</button><button class="bb gray" id="tolobby">LOBBY</button></div>
