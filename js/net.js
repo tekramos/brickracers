@@ -29,7 +29,7 @@ export class NetHost {
     this.onJoin = () => []; this.onLeave = () => {}; this.onButton = () => {}; this.onChange = () => {};
   }
   async start(code, broker){
-    this.stop(); this.code = code;
+    this.stop(); this.code = code; this.broker = broker || 0;
     try { await loadJs(PAD_CDN.mqtt); } catch (e) { return; }
     const m = this.mq = window.mqtt.connect(window.PAD_BROKER_URL || PAD_BROKERS[broker || 0], { clientId:'brn-' + code + '-' + Math.random().toString(16).slice(2, 8), keepalive:20, reconnectPeriod:2000, connectTimeout:6000, clean:true });
     m.on('connect', () => m.subscribe(TOPIC + code + '/net/up', { qos:0 }));
@@ -42,7 +42,8 @@ export class NetHost {
   get url(){
     if (!this.code || !/^https?:$/.test(location.protocol) && !window.PAD_HOME) return '';
     const u = new URL('index.html', window.PAD_HOME || location.href); u.search = '?join=' + this.code; u.hash = '';
-    if (window.PAD_BROKER_URL) u.searchParams.set('bu', window.PAD_BROKER_URL);
+    // the joining device must use the same relay server as this host
+    if (window.PAD_BROKER_URL) u.searchParams.set('bu', window.PAD_BROKER_URL); else u.searchParams.set('b', String(this.broker || 0));
     return u.href;
   }
   relay(o, sub = 'down'){ if (this.mq && this.mq.connected) this.mq.publish(TOPIC + this.code + '/net/' + sub, JSON.stringify(o), { qos:0 }); }
@@ -130,11 +131,18 @@ export class NetClient {
   async start(){
     try { await loadJs(PAD_CDN.mqtt); } catch (e) { this.setStatus('error'); return; }
     const QS = new URLSearchParams(location.search);
-    const url = QS.get('bu') || PAD_BROKERS[+QS.get('b') || 0] || PAD_BROKERS[0];
-    const m = this.mq = window.mqtt.connect(url, { clientId:'brc-' + Math.random().toString(16).slice(2, 10), keepalive:20, reconnectPeriod:2000, connectTimeout:6000, clean:true });
+    const first = QS.get('bu') ? -1 : (+QS.get('b') || 0);
     const T = TOPIC + this.code + '/net/';
-    m.on('connect', () => { m.subscribe(T + 'down', { qos:0 }); m.subscribe(T + 'snap', { qos:0 }); this.hello(); });
-    m.on('message', (t, buf) => { let d; try { d = JSON.parse(buf.toString()); } catch (e) { return; } this.onHost(d, t.endsWith('/snap') ? 'snap' : 'relay'); });
+    // connect to the relay the host is on; if that cannot be reached, try the others
+    const open = i => {
+      const url = i < 0 ? QS.get('bu') : PAD_BROKERS[i]; let ok = false;
+      const m = this.mq = window.mqtt.connect(url, { clientId:'brc-' + Math.random().toString(16).slice(2, 10), keepalive:20, reconnectPeriod:2000, connectTimeout:6000, clean:true });
+      m.on('connect', () => { ok = true; m.subscribe(T + 'down', { qos:0 }); m.subscribe(T + 'snap', { qos:0 }); this.hello(); });
+      m.on('message', (t, buf) => { let d; try { d = JSON.parse(buf.toString()); } catch (e) { return; } this.onHost(d, t.endsWith('/snap') ? 'snap' : 'relay'); });
+      const fail = () => { if (ok || i < 0 || m.__dead) return; m.__dead = true; m.end(true); open((i + 1) % PAD_BROKERS.length); };
+      m.on('error', fail); setTimeout(fail, 7000);
+    };
+    open(first);
     setInterval(() => this.heartbeat(), 1000);
   }
   setStatus(s){ this.status = s; this.onStatus(s); }
